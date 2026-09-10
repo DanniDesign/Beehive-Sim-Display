@@ -148,7 +148,7 @@ func (h *Hive) AgeEgg(x, y int) error {
 	}
 
 	if rand.Float64() < 0.50 {
-		cell.eggAge += 0.005
+		cell.eggAge += 0.02
 	}
 
 	r, g, b, _ := cell.Color.RGBA()
@@ -173,7 +173,7 @@ func (h *Hive) HatchEgg(x, y int) {
 
 	weights := map[Role]int{
 		Forager:        70,
-		QueenAttendant: 15,
+		QueenAttendant: 20,
 	}
 
 	sum := 0

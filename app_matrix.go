@@ -10,7 +10,7 @@ import (
 	"beehive-sim2/render"
 	"beehive-sim2/simulation"
 
-	"github.com/mcuadros/go-rpi-rgb-led-matrix"
+	rgbmatrix "github.com/mcuadros/go-rpi-rgb-led-matrix"
 )
 
 func RunApp(hive *simulation.Hive, cfg Config) error {
@@ -20,7 +20,7 @@ func RunApp(hive *simulation.Hive, cfg Config) error {
 		ChainLength:     1,
 		Parallel:        1,
 		PWMBits:         11,
-		Brightness:      60,
+		Brightness:      55,
 		HardwareMapping: "adafruit-hat",
 	}
 

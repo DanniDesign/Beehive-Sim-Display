@@ -9,6 +9,29 @@ func (h *Hive) Update() {
 	h.Age += 1
 	h.Tick += 1
 
+	// Single O(n) pass: check whether an attendant exists, and remember the
+	// first forager as a promotion candidate in case one is needed. This
+	// still promotes at most ONE bee per tick (matching the original
+	// behavior) instead of computing a stale hasAttendant flag and handing
+	// it to every forager, which would let all of them self-promote in the
+	// same tick the instant the hive's last attendant dies of old age.
+	hasAttendant := false
+	var promotable *Bee
+	for _, b := range h.bees {
+		if b.Role == QueenAttendant {
+			hasAttendant = true
+			break
+		}
+		if b.Role == Forager && promotable == nil {
+			promotable = b
+		}
+	}
+	if !hasAttendant && promotable != nil {
+		promotable.Role = QueenAttendant
+		promotable.Task = Wander
+		promotable.hasTarget = false
+	}
+
 	beesCopy := make([]*Bee, len(h.bees))
 	copy(beesCopy, h.bees)
 
@@ -21,12 +44,16 @@ func (h *Hive) Update() {
 		}
 	}
 
-	for y := range h.Grid {
-		for x := range h.Grid[y] {
-			if h.Grid[y][x].State == Egg {
-				h.AgeEgg(x, y)
-			}
-		}
+	// Only visit cells that are actually eggs, instead of scanning the
+	// whole grid every tick.
+	for key := range h.eggCells {
+		x, y := key%h.width, key/h.width
+		h.AgeEgg(x, y)
+	}
+
+	// Cheap periodic check rather than every tick.
+	if h.Tick%expansionCheckEvery == 0 {
+		h.MaybeExpandStorage()
 	}
 }
 
@@ -41,23 +68,6 @@ func (h *Hive) UpdateTask(b *Bee) {
 
 	switch b.Role {
 	case Forager:
-		// Failsafe: Check if the hive lacks an active Queen Attendant
-		hasAttendant := false
-		for _, bee := range h.bees {
-			if bee.Role == QueenAttendant {
-				hasAttendant = true
-				break
-			}
-		}
-
-		// Promote this forager if no attendant exists
-		if !hasAttendant {
-			b.Role = QueenAttendant
-			b.Task = Wander
-			b.hasTarget = false
-			return
-		}
-
 		if b.CarryingHoney {
 			h.TaskSupplyToStorage(b)
 			return
@@ -68,8 +78,8 @@ func (h *Hive) UpdateTask(b *Bee) {
 			return
 		}
 
-		if h.storage.storedAmount < h.storage.capacity {
-			if rand.Float64() < 0.15 {
+		if h.TotalStorageStored() < h.TotalStorageCapacity() {
+			if rand.Float64() < 0.15 && h.amountOutside < h.maxOutside {
 				b.Task = Forage
 				b.hasTarget = false
 				h.TaskForage(b)
@@ -95,14 +105,12 @@ func (h *Hive) UpdateTask(b *Bee) {
 
 		// 3. Only START a new collection mission if conditions are met AND using a low tick roll
 		queen := h.GetQueen()
-		if queen != nil && !queen.CarryingHoney && h.storage.storedAmount > 0 && h.eggs < 25 {
+		if queen != nil && !queen.CarryingHoney && h.TotalStorageStored() > 0 && h.eggs < h.MaxEggs() {
 			// Roll chance (e.g., 5-10%) so attendants stagger their runs
-			if rand.Float64() < 0.10 {
-				b.Task = CollectFromStorage
-				b.hasTarget = false
-				h.TaskCollectFromStorage(b)
-				return
-			}
+			b.Task = CollectFromStorage
+			b.hasTarget = false
+			h.TaskCollectFromStorage(b)
+			return
 		}
 
 		// Otherwise, wander
@@ -119,6 +127,8 @@ func (h *Hive) UpdateTask(b *Bee) {
 	}
 }
 
+// UpdateCellState is the single place cell state changes, so it's also the
+// single place the egg-position index (h.eggCells) is kept in sync.
 func (h *Hive) UpdateCellState(x, y int, state CellState) {
 	var clr color.RGBA
 	switch state {
@@ -129,9 +139,18 @@ func (h *Hive) UpdateCellState(x, y int, state CellState) {
 	case Egg:
 		clr = color.RGBA{10, 224, 10, 255}
 	}
+
+	prev := h.Grid[y][x].State
 	h.Grid[y][x] = Cell{
 		State: state,
 		Color: clr,
+	}
+
+	key := y*h.width + x
+	if prev == Egg && state != Egg {
+		delete(h.eggCells, key)
+	} else if state == Egg && prev != Egg {
+		h.eggCells[key] = struct{}{}
 	}
 }
 
@@ -147,7 +166,7 @@ func (h *Hive) AgeEgg(x, y int) error {
 		return nil
 	}
 
-	if rand.Float64() < 0.50 {
+	if rand.Float64() < 0.30 {
 		cell.eggAge += 0.02
 	}
 
@@ -195,6 +214,7 @@ func (h *Hive) HatchEgg(x, y int) {
 
 	newBee := h.SpawnBee(x, y, chosen)
 	h.bees = append(h.bees, newBee)
+	h.occupy(newBee.X, newBee.Y)
 	h.eggs--
 }
 
@@ -206,13 +226,18 @@ func (h *Hive) AgeBee(bee *Bee) {
 	case QueenAttendant:
 		beeAgeIncrement = 0.0010
 	default:
-		beeAgeIncrement = 0.0015
+		beeAgeIncrement = 0.0012
 	}
 	bee.Age += beeAgeIncrement
 
 	if bee.Age > 1.0 {
-		if bee.CarryingHoney && h.storage.storedAmount < h.storage.capacity + 15{
-			h.UpdateCellState(bee.X, bee.Y, Honey)
+		if bee.CarryingHoney && h.TotalStorageStored() < h.TotalStorageCapacity()+15 {
+			if rand.Float64() < 0.2 {
+				h.UpdateCellState(bee.X, bee.Y, Honey)
+			}
+		}
+		if bee.IsOutside {
+			h.amountOutside--
 		}
 		h.RemoveBee(bee)
 	}

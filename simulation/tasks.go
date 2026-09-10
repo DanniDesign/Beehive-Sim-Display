@@ -5,55 +5,92 @@ import (
 )
 
 func (h *Hive) TaskForage(b *Bee) {
-    b.Task = Forage
+	b.Task = Forage
 
-    // Phase 1: Inside the hive, heading for the exit door
-    if !b.IsOutside {
-        if !b.hasTarget {
-            b.targetX = clamp(h.ExitX+rand.Intn(3)-1, 1, h.width-2)
-            b.targetY = clamp(h.ExitY+rand.Intn(3)-1, 1, h.height-2)
-            b.hasTarget = true
-        }
+	// Phase 1: Inside the hive, heading for the exit door
+	if !b.IsOutside {
+		if !b.hasTarget {
+			b.targetX = clamp(h.ExitX+rand.Intn(3)-1, 1, h.width-2)
+			b.targetY = clamp(h.ExitY+rand.Intn(3)-1, 1, h.height-2)
+			b.hasTarget = true
+		}
 
-        // Near exit door check
-        if abs(b.X-h.ExitX) <= 1 && abs(b.Y-h.ExitY) <= 1 {
-            if rand.Float64() < 0.30 {
-                b.IsOutside = true
-                b.TaskTimer = 40 + rand.Intn(60)
-                b.hasTarget = false // Reset target for outside phase
-            }
-        }
-        return
-    }
+		// Near exit door check
+		if abs(b.X-h.ExitX) <= 1 && abs(b.Y-h.ExitY) <= 1 {
+			// 1. CHECK YOUR CAP HERE
+			if h.amountOutside < h.maxOutside {
+				if rand.Float64() < 0.30 {
+					h.vacate(b.X, b.Y)
+					b.IsOutside = true
+					h.amountOutside++ // INCREMENT YOUR COUNTER
+					b.TaskTimer = 40 + rand.Intn(60)
+					b.hasTarget = false
+				}
+			} else {
+				// 2. CLEAR THE DOORWAY
+				// If it's full, cancel foraging and send them back to wait at storage
+				b.Task = Wander
+				b.hasTarget = false
+				b.TaskCooldown = 30 + rand.Intn(30)
 
-    // Phase 2: Outside, performing foraging work until timer runs out
-    if b.IsOutside && b.TaskTimer <= 0 {
-        b.IsOutside = false
-        b.CarryingHoney = true
-        b.PrevTask = Forage
-        b.hasTarget = false
-        b.Task = SupplyToStorage
-        b.TaskCooldown = rand.Intn(120)
-    }
+				storage := h.nearestStorageWithSpace(b.X, b.Y)
+				if storage != nil {
+					x, y, ok := h.RandomCellNear(storage.centerX, storage.centerY, 4, Empty)
+					if ok {
+						b.targetX = x
+						b.targetY = y
+						b.hasTarget = true
+					}
+				}
+			}
+		}
+		return
+	}
+
+	// Phase 2: Outside, performing foraging work until timer runs out
+	if b.IsOutside && b.TaskTimer <= 0 {
+		b.IsOutside = false
+		h.amountOutside-- // DECREMENT YOUR COUNTER
+
+		h.occupy(b.X, b.Y)
+		b.CarryingHoney = true
+		b.PrevTask = Forage
+		b.hasTarget = false
+		b.Task = SupplyToStorage
+		b.TaskCooldown = rand.Intn(120)
+	}
 }
 
 func (h *Hive) TaskSupplyToStorage(b *Bee) {
 	b.Task = SupplyToStorage
-	storage := h.storage
 
-	if !b.hasTarget {
-		regionRadius := 5
-		region := h.getRegion(storage.centerX, storage.centerY, regionRadius)
-		emptyX, emptyY, ok := h.RandomCellInRegion(region, Empty, storage.centerX-regionRadius, storage.centerY-regionRadius)
+	// If the depot we were heading to filled up while en route, pick another.
+	if b.TargetStorage != nil && b.TargetStorage.storedAmount >= b.TargetStorage.capacity {
+		b.TargetStorage = nil
+		b.hasTarget = false
+	}
 
-		if !ok {
+	if b.TargetStorage == nil {
+		storage := h.nearestStorageWithSpace(b.X, b.Y)
+		if storage == nil {
 			b.Task = Wander
 			b.hasTarget = false
 			return
 		}
+		b.TargetStorage = storage
+	}
+	storage := b.TargetStorage
 
-		b.targetX = emptyX
-		b.targetY = emptyY
+	if !b.hasTarget {
+		x, y, ok := h.RandomCellNear(storage.centerX, storage.centerY, 5, Empty)
+		if !ok {
+			b.TargetStorage = nil
+			b.Task = Wander
+			b.hasTarget = false
+			return
+		}
+		b.targetX = x
+		b.targetY = y
 		b.hasTarget = true
 	}
 
@@ -64,27 +101,41 @@ func (h *Hive) TaskSupplyToStorage(b *Bee) {
 		b.PrevTask = SupplyToStorage
 		b.Task = Wander
 		b.hasTarget = false
+		b.TargetStorage = nil
 		b.TaskCooldown = 20 + rand.Intn(30)
 	}
 }
 
 func (h *Hive) TaskCollectFromStorage(b *Bee) {
 	b.Task = CollectFromStorage
-	storage := h.storage
 
-	if !b.hasTarget {
-		regionRadius := 5
-		region := h.getRegion(storage.centerX, storage.centerY, regionRadius)
-		honeyX, honeyY, ok := h.RandomCellInRegion(region, Honey, storage.centerX-regionRadius, storage.centerY-regionRadius)
+	// If the depot we were heading to emptied out while en route, pick another.
+	if b.TargetStorage != nil && b.TargetStorage.storedAmount <= 0 {
+		b.TargetStorage = nil
+		b.hasTarget = false
+	}
 
-		if !ok {
+	if b.TargetStorage == nil {
+		storage := h.nearestStorageWithHoney(b.X, b.Y)
+		if storage == nil {
 			b.Task = Wander
 			b.hasTarget = false
 			return
 		}
+		b.TargetStorage = storage
+	}
+	storage := b.TargetStorage
 
-		b.targetX = honeyX
-		b.targetY = honeyY
+	if !b.hasTarget {
+		x, y, ok := h.RandomCellNear(storage.centerX, storage.centerY, 5, Honey)
+		if !ok {
+			b.TargetStorage = nil
+			b.Task = Wander
+			b.hasTarget = false
+			return
+		}
+		b.targetX = x
+		b.targetY = y
 		b.hasTarget = true
 	}
 
@@ -97,6 +148,7 @@ func (h *Hive) TaskCollectFromStorage(b *Bee) {
 		b.PrevTask = CollectFromStorage
 		b.Task = SupplyToQueen
 		b.hasTarget = false
+		b.TargetStorage = nil
 	}
 }
 
@@ -116,7 +168,7 @@ func (h *Hive) TaskSupplyToQueen(b *Bee) {
 	b.hasTarget = true
 
 	// Increased reach distance slightly (within 1 cells) to make handoffs fluid
-	if abs(b.X-queen.X) <= 1 && abs(b.Y-queen.Y) <= 1 {
+	if abs(b.X-queen.X) <= 1 && abs(b.Y-queen.Y) <= 2 {
 		b.CarryingHoney = false
 		queen.CarryingHoney = true
 		b.PrevTask = SupplyToQueen
@@ -129,22 +181,16 @@ func (h *Hive) TaskSupplyToQueen(b *Bee) {
 func (h *Hive) TaskLayEggs(b *Bee) {
 	b.Task = LayEggs
 
-	regionRadius := 2
-	region := h.getRegion(b.X, b.Y, regionRadius)
-	emptyX, emptyY, ok := h.RandomCellInRegion(region, Empty, b.X-regionRadius, b.Y-regionRadius)
-
+	regionRadius := 1
+	x, y, ok := h.RandomCellNear(b.X, b.Y, regionRadius, Empty)
 	if !ok {
 		b.Task = Wander
 		b.hasTarget = false
 		return
 	}
 
-	if rand.Float64() > 0.5 {
-		return
-	}
-
-	if h.Grid[emptyY][emptyX].State == Empty && b.CarryingHoney {
-		h.UpdateCellState(emptyX, emptyY, Egg)
+	if h.Grid[y][x].State == Empty && b.CarryingHoney {
+		h.UpdateCellState(x, y, Egg)
 		h.eggs++
 		b.CarryingHoney = false
 		b.Task = Wander

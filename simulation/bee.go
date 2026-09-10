@@ -43,10 +43,11 @@ type Bee struct {
 	TaskTimer        int
 	IsOutside        bool
 	TaskCooldown     int
+	TargetStorage    *Storage // which depot this bee is currently headed to/from
 }
 
 func (h *Hive) SpawnBee(x, y int, role Role) *Bee {
-	return &Bee{
+	b := &Bee{
 		ID:            uuid.New(),
 		Role:          role,
 		Age:           0.0,
@@ -59,13 +60,17 @@ func (h *Hive) SpawnBee(x, y int, role Role) *Bee {
 		Task:          Wander,
 		PrevTask:      None,
 	}
+	if role == Queen {
+		h.queen = b
+	}
+	return b
 }
 
 func (h *Hive) GenerateBees(amount, spawnRadius int) []*Bee {
 	bs := make([]*Bee, 0, amount+2)
 	hiveX, hiveY := h.centerX, h.centerY
 
-	for i := 0; i < amount; i++ {
+	for range amount {
 		spawnX := clamp(hiveX+rand.Intn(spawnRadius*2+1)-spawnRadius, 1, h.width-2)
 		spawnY := clamp(hiveY+rand.Intn(spawnRadius*2+1)-spawnRadius, 1, h.height-2)
 
@@ -76,9 +81,11 @@ func (h *Hive) GenerateBees(amount, spawnRadius int) []*Bee {
 
 	queen := h.SpawnBee(hiveX, hiveY, Queen)
 	bs = append(bs, queen)
+	for range 3 {
+		queenAtt := h.SpawnBee(clamp(hiveX+1, 1, h.width-2), clamp(hiveY+1, 1, h.height-2), QueenAttendant)
+		bs = append(bs, queenAtt)
 
-	queenAtt := h.SpawnBee(clamp(hiveX+1, 1, h.width-2), clamp(hiveY+1, 1, h.height-2), QueenAttendant)
-	bs = append(bs, queenAtt)
+	}
 
 	return bs
 }
@@ -119,7 +126,19 @@ func (h *Hive) MoveBee(b *Bee) {
 	newX := clamp(b.X+dx, 1, h.width-2)
 	newY := clamp(b.Y+dy, 1, h.height-2)
 
+	if newX == b.X && newY == b.Y {
+		return
+	}
+
+	// Don't let a bee step onto a cell another bee is already standing on;
+	// it just waits a tick and tries again instead of piling up.
+	if h.IsOccupied(newX, newY) {
+		return
+	}
+
+	h.vacate(b.X, b.Y)
 	b.X, b.Y = newX, newY
+	h.occupy(b.X, b.Y)
 }
 
 func (b *Bee) GetColor(tick int) color.Color {

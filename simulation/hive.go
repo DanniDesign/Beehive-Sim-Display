@@ -39,9 +39,14 @@ type Hive struct {
 	Age              int
 	Grid             [][]Cell // Exported to align with renderers
 	bees             []*Bee
-	storage          *Storage
+	queen            *Bee // cached queen pointer, avoids scanning bees every lookup
+	storages         []*Storage
 	eggs             int
+	eggCells         map[int]struct{} // y*width+x -> present; keeps AgeEgg from scanning the whole grid
+	occupied         map[int]int      // y*width+x -> bee count; keeps bees from stacking on each other
 	Tick             int
+	amountOutside    int
+	maxOutside       int
 }
 
 func NewHive(beeAmount, width, height int) *Hive {
@@ -60,22 +65,6 @@ func NewHive(beeAmount, width, height int) *Hive {
 	margin := 10
 	hiveStartX := rand.Intn(width-2*margin) + margin
 	hiveStartY := rand.Intn(height-2*margin) + margin
-
-	radius := min(hiveStartX-4, hiveStartY-4, width-1-hiveStartX-4, height-1-hiveStartY-4)
-	storageMargin := 4
-	avoidRadius := 5
-	storageX, storageY := 0, 0
-
-	for {
-		storageX = hiveStartX + rand.Intn(radius*2+1) - radius
-		storageY = hiveStartY + rand.Intn(radius*2+1) - radius
-		storageX = clamp(storageX, storageMargin, width-1-storageMargin)
-		storageY = clamp(storageY, storageMargin, height-1-storageMargin)
-
-		if abs(storageX-hiveStartX) > avoidRadius || abs(storageY-hiveStartY) > avoidRadius {
-			break
-		}
-	}
 
 	var exitX, exitY int
 	edge := rand.Intn(4)
@@ -96,27 +85,29 @@ func NewHive(beeAmount, width, height int) *Hive {
 	}
 
 	h := &Hive{
-		Name:    gofakeit.Bird(),
-		centerX: hiveStartX,
-		centerY: hiveStartY,
-		ExitX:   exitX,
-		ExitY:   exitY,
-		Grid:    cells,
-		State:   Healty,
-		Age:     0,
-		height:  height,
-		width:   width,
-		eggs:    0,
+		Name:          gofakeit.Bird(),
+		centerX:       hiveStartX,
+		centerY:       hiveStartY,
+		ExitX:         exitX,
+		ExitY:         exitY,
+		Grid:          cells,
+		State:         Healty,
+		Age:           0,
+		height:        height,
+		width:         width,
+		eggs:          0,
+		eggCells:      make(map[int]struct{}),
+		occupied:      make(map[int]int),
+		amountOutside: 0,
+		maxOutside:    10,
 	}
+
+	h.addStorage() // initial depot; more open up automatically as the colony grows
 
 	h.bees = h.GenerateBees(beeAmount, 3)
-
-	h.storage = &Storage{
-		Name:         gofakeit.Name(),
-		centerX:      storageX,
-		centerY:      storageY,
-		storedAmount: 0,
-		capacity:     15,
+	for _, b := range h.bees {
+		h.occupy(b.X, b.Y)
 	}
+
 	return h
 }

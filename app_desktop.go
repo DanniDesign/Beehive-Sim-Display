@@ -17,7 +17,7 @@ type DesktopApp struct {
 
 func (a *DesktopApp) Update() error {
 	a.tickCount++
-	if a.tickCount%10 == 0 {
+	if a.tickCount%1 == 0 {
 		a.hive.Update()
 	}
 	return nil

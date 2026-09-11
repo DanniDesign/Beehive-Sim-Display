@@ -2,6 +2,8 @@ package simulation
 
 import (
 	"math/rand"
+
+	"github.com/gookit/slog"
 )
 
 func clamp(v, min, max int) int {
@@ -17,31 +19,31 @@ func (h *Hive) Cells() [][]Cell {
 	return h.Grid
 }
 
-func (h *Hive) Bees() []*Bee {
-	return h.bees
+func (h *Hive) GetBees() []*Bee {
+	return h.Bees
 }
 
 // IsOccupied reports whether a bee is currently standing on (x, y).
 // Backed by an incrementally-maintained count map (kept in sync by
-// occupy/vacate) instead of scanning every bee, so it's cheap to call
+// Occupy/vacate) instead of scanning every bee, so it's cheap to call
 // from the hot movement path.
 func (h *Hive) IsOccupied(x, y int) bool {
-	return h.occupied[y*h.width+x] > 0
+	return h.Occupied[y*h.Width+x] > 0
 }
 
-func (h *Hive) occupy(x, y int) {
-	if h.occupied == nil {
-		h.occupied = make(map[int]int)
+func (h *Hive) Occupy(x, y int) {
+	if h.Occupied == nil {
+		h.Occupied = make(map[int]int)
 	}
-	h.occupied[y*h.width+x]++
+	h.Occupied[y*h.Width+x]++
 }
 
 func (h *Hive) vacate(x, y int) {
-	key := y*h.width + x
-	if h.occupied[key] <= 1 {
-		delete(h.occupied, key)
+	key := y*h.Width + x
+	if h.Occupied[key] <= 1 {
+		delete(h.Occupied, key)
 	} else {
-		h.occupied[key]--
+		h.Occupied[key]--
 	}
 }
 
@@ -61,25 +63,6 @@ func abs(x int) int {
 	return x
 }
 
-func (h *Hive) getRegion(centerX, centerY, radius int) [][]Cell {
-	region := [][]Cell{}
-
-	for y := centerY - radius; y <= centerY+radius; y++ {
-		if y < 0 || y >= h.height {
-			continue
-		}
-		row := []Cell{}
-		for x := centerX - radius; x <= centerX+radius; x++ {
-			if x < 0 || x >= h.width {
-				continue
-			}
-			row = append(row, h.Grid[y][x])
-		}
-		region = append(region, row)
-	}
-	return region
-}
-
 // Updated to return a boolean success flag to prevent clustering bugs
 func (h *Hive) RandomCellInRegion(region [][]Cell, state CellState, offsetX, offsetY int) (int, int, bool) {
 	foundCells := []struct{ x, y int }{}
@@ -87,8 +70,8 @@ func (h *Hive) RandomCellInRegion(region [][]Cell, state CellState, offsetX, off
 	for y, row := range region {
 		for x, cell := range row {
 			if cell.State == state {
-				rx := clamp(x+offsetX, 0, h.width-1)
-				ry := clamp(y+offsetY, 0, h.height-1)
+				rx := clamp(x+offsetX, 0, h.Width-1)
+				ry := clamp(y+offsetY, 0, h.Height-1)
 				foundCells = append(foundCells, struct{ x, y int }{rx, ry})
 			}
 		}
@@ -103,25 +86,25 @@ func (h *Hive) RandomCellInRegion(region [][]Cell, state CellState, offsetX, off
 }
 
 // RandomCellNear returns a uniformly-random cell of the given state within
-// radius of (centerX, centerY), scanning the grid once with reservoir
+// radius of (CenterX, CenterY), scanning the grid once with reservoir
 // sampling instead of building an intermediate region slice plus a found-
 // cells slice (what getRegion + RandomCellInRegion used to do together).
 // This is the hot path for foraging/storage/egg-laying target selection,
 // so avoiding the double allocation matters as populations grow.
-func (h *Hive) RandomCellNear(centerX, centerY, radius int, state CellState) (int, int, bool) {
-	minX, maxX := centerX-radius, centerX+radius
-	minY, maxY := centerY-radius, centerY+radius
+func (h *Hive) RandomCellNear(CenterX, CenterY, radius int, state CellState) (int, int, bool) {
+	minX, maxX := CenterX-radius, CenterX+radius
+	minY, maxY := CenterY-radius, CenterY+radius
 	if minX < 0 {
 		minX = 0
 	}
 	if minY < 0 {
 		minY = 0
 	}
-	if maxX >= h.width {
-		maxX = h.width - 1
+	if maxX >= h.Width {
+		maxX = h.Width - 1
 	}
-	if maxY >= h.height {
-		maxY = h.height - 1
+	if maxY >= h.Height {
+		maxY = h.Height - 1
 	}
 
 	foundX, foundY, count := 0, 0, 0
@@ -144,20 +127,61 @@ func (h *Hive) RandomCellNear(centerX, centerY, radius int, state CellState) (in
 }
 
 func (h *Hive) GetQueen() *Bee {
-	return h.queen
+	return h.Queen
 }
 
 func (h *Hive) RemoveBee(bee *Bee) {
-	for i, b := range h.bees {
+	for i, b := range h.Bees {
 		if b == bee {
-			h.bees = append(h.bees[:i], h.bees[i+1:]...)
-			if !bee.IsOutside {
+			h.Bees = append(h.Bees[:i], h.Bees[i+1:]...)
+			state := b.State
+			if state != StateOutside {
 				h.vacate(bee.X, bee.Y)
 			}
 			break
 		}
 	}
-	if h.queen == bee {
-		h.queen = nil
+	if h.Queen == bee {
+		h.Queen = nil
 	}
+}
+
+// ChooseExit randomly selects one of the four corners to leave the hive.
+func (h *Hive) ChooseExit() (x, y int) {
+	choice := rand.Intn(4)
+	switch choice {
+	case 0:
+		return 1, 1 // Top-Left corner
+	case 1:
+		return h.Width - 2, 1 // Top-Right corner
+	case 2:
+		return 1, h.Height - 2 // Bottom-Left corner
+	default:
+		return h.Width - 2, h.Height - 2 // Bottom-Right corner
+	}
+}
+
+// ChooseEntrance randomly selects one of the four wall centers to return to the hive.
+func (h *Hive) ChooseEntrance() (x, y int) {
+	choice := rand.Intn(4)
+	switch choice {
+	case 0:
+		return h.Width / 2, 1 // Top-Middle
+	case 1:
+		return h.Width - 2, h.Height / 2 // Right-Middle
+	case 2:
+		return h.Width / 2, h.Height - 2 // Bottom-Middle
+	default:
+		return 1, h.Height / 2 // Left-Middle
+	}
+}
+
+func (h *Hive) UpdateState(b *Bee, task Event) {
+	err := b.FSM.Fire(task)
+
+	if err != nil {
+		slog.Fatalf("failed to set task: %v", err)
+	}
+	state := b.FSM.MustState().(State)
+	b.State = state
 }

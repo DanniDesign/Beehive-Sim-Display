@@ -5,14 +5,13 @@ import (
 	"math/rand"
 
 	"github.com/google/uuid"
+	"github.com/qmuntal/stateless"
 )
 
 type Role int
 
 const (
 	Forager Role = iota
-	Drone
-	Nurse
 	QueenAttendant
 	Queen
 )
@@ -30,59 +29,67 @@ const (
 )
 
 type Bee struct {
-	ID               uuid.UUID
-	Role             Role
-	Age              float64
-	Alive            bool
-	CarryingHoney    bool
-	X, Y             int
-	targetX, targetY int
-	hasTarget        bool
-	Task             Task
-	PrevTask         Task
-	TaskTimer        int
-	IsOutside        bool
-	TaskCooldown     int
-	TargetStorage    *Storage // which depot this bee is currently headed to/from
+	ID                       uuid.UUID
+	Role                     Role
+	Age                      float64
+	Alive                    bool
+	Carrying                 bool
+	X, Y                     int
+	targetX, targetY         int
+	exitTargetX, exitTargetY int
+	hasTarget                bool
+	Task                     Task
+	PrevTask                 Task
+	TaskTimer                int
+	TaskCooldown             int
+	TargetStorage            *Storage // which depot this bee is currently headed to/from
+	stuckTicks               int
+	ageRate                  float64
+	FSM                      *stateless.StateMachine
+	State                    State
 }
 
 func (h *Hive) SpawnBee(x, y int, role Role) *Bee {
 	b := &Bee{
-		ID:            uuid.New(),
-		Role:          role,
-		Age:           0.0,
-		Alive:         true,
-		X:             x,
-		Y:             y,
-		targetX:       x,
-		targetY:       y,
-		CarryingHoney: false,
-		Task:          Wander,
-		PrevTask:      None,
+		ID:          uuid.New(),
+		Role:        role,
+		Age:         0.0,
+		Alive:       true,
+		exitTargetX: 0,
+		exitTargetY: 0,
+		X:           x,
+		Y:           y,
+		targetX:     x,
+		targetY:     y,
+		Carrying:    false,
+		Task:        Wander,
+		PrevTask:    None,
+		ageRate:     0.65 + rand.Float64()*0.7,
 	}
 	if role == Queen {
-		h.queen = b
+		h.Queen = b
 	}
 	return b
 }
 
 func (h *Hive) GenerateBees(amount, spawnRadius int) []*Bee {
 	bs := make([]*Bee, 0, amount+2)
-	hiveX, hiveY := h.centerX, h.centerY
+	hiveX, hiveY := h.CenterX, h.CenterY
 
 	for range amount {
-		spawnX := clamp(hiveX+rand.Intn(spawnRadius*2+1)-spawnRadius, 1, h.width-2)
-		spawnY := clamp(hiveY+rand.Intn(spawnRadius*2+1)-spawnRadius, 1, h.height-2)
+		spawnX := clamp(hiveX+rand.Intn(spawnRadius*2+1)-spawnRadius, 1, h.Width-2)
+		spawnY := clamp(hiveY+rand.Intn(spawnRadius*2+1)-spawnRadius, 1, h.Height-2)
 
 		bee := h.SpawnBee(spawnX, spawnY, Forager)
+
 		bee.TaskCooldown = rand.Intn(120)
 		bs = append(bs, bee)
 	}
 
-	queen := h.SpawnBee(hiveX, hiveY, Queen)
-	bs = append(bs, queen)
+	Queen := h.SpawnBee(hiveX, hiveY, Queen)
+	bs = append(bs, Queen)
 	for range 3 {
-		queenAtt := h.SpawnBee(clamp(hiveX+1, 1, h.width-2), clamp(hiveY+1, 1, h.height-2), QueenAttendant)
+		queenAtt := h.SpawnBee(clamp(hiveX+1, 1, h.Width-2), clamp(hiveY+1, 1, h.Height-2), QueenAttendant)
 		bs = append(bs, queenAtt)
 
 	}
@@ -91,23 +98,30 @@ func (h *Hive) GenerateBees(amount, spawnRadius int) []*Bee {
 }
 
 func (h *Hive) MoveBee(b *Bee) {
-	if b.IsOutside {
+	state := b.State
+
+	if state == StateOutside {
 		return
 	}
+
 	if b.Role == Queen {
 		if rand.Float64() > 0.15 {
 			return
 		}
-	} else if rand.Float64() > 0.70 && b.Task == Wander {
+		// 1. Check FSM state instead of b.Task
+	} else if rand.Float64() > 0.70 && state == StateWandering {
 		return
 	}
 
 	var dx, dy int
 
-	if b.Task == Wander || !b.hasTarget {
+	// 2. Map the legacy Wander check directly to StateWandering
+	if state == StateWandering || !b.hasTarget {
 		dx = rand.Intn(3) - 1
 		dy = rand.Intn(3) - 1
 	} else {
+		// Directed movement handles all other target-based states
+		// (StateMovingToExit, StateBringingHoneyToStorage, etc.)
 		distX := b.targetX - b.X
 		distY := b.targetY - b.Y
 
@@ -123,22 +137,28 @@ func (h *Hive) MoveBee(b *Bee) {
 		}
 	}
 
-	newX := clamp(b.X+dx, 1, h.width-2)
-	newY := clamp(b.Y+dy, 1, h.height-2)
+	newX := clamp(b.X+dx, 1, h.Width-2)
+	newY := clamp(b.Y+dy, 1, h.Height-2)
 
 	if newX == b.X && newY == b.Y {
 		return
 	}
 
-	// Don't let a bee step onto a cell another bee is already standing on;
-	// it just waits a tick and tries again instead of piling up.
 	if h.IsOccupied(newX, newY) {
+		if b.hasTarget {
+			b.stuckTicks++
+			if b.stuckTicks > 8 {
+				b.hasTarget = false
+				b.stuckTicks = 0
+			}
+		}
 		return
 	}
 
+	b.stuckTicks = 0
 	h.vacate(b.X, b.Y)
 	b.X, b.Y = newX, newY
-	h.occupy(b.X, b.Y)
+	h.Occupy(b.X, b.Y)
 }
 
 func (b *Bee) GetColor(tick int) color.Color {
@@ -151,7 +171,7 @@ func (b *Bee) GetColor(tick int) color.Color {
 		return color.RGBA{255, 5, 5, 255}
 	}
 
-	if b.CarryingHoney {
+	if b.Carrying {
 		// Pure Yellow LED (Honey carrier)
 		return color.RGBA{255, 255, 0, 255}
 	}

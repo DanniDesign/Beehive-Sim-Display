@@ -3,8 +3,9 @@
 package main
 
 import (
-	"beehive-sim2/render"
-	"beehive-sim2/simulation"
+	"github.com/DanniDesign/Beehive-Sim-Display/render"
+
+	"github.com/DanniDesign/Beehive-Sim-Display/simulation"
 
 	"github.com/hajimehoshi/ebiten/v2"
 )
@@ -34,7 +35,7 @@ func (a *DesktopApp) Layout(outsideWidth, outsideHeight int) (int, int) {
 func RunApp(hive *simulation.Hive, cfg Config) error {
 	ebiten.SetWindowSize(cfg.Width*15, cfg.Height*15)
 	ebiten.SetWindowTitle("Beehive Simulation")
-
+	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 	app := &DesktopApp{
 		hive: hive,
 		cfg:  cfg,

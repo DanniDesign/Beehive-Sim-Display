@@ -1,200 +1,207 @@
 package simulation
 
 import (
+	"fmt"
 	"math/rand"
+
+	"github.com/gookit/slog"
 )
 
 func (h *Hive) TaskForage(b *Bee) {
-	b.Task = Forage
+	state := b.State
+	switch state {
+	case StateMovingToExit:
+		if b.exitTargetX == 0 && b.exitTargetY == 0 {
+			b.exitTargetX, b.exitTargetY = h.ChooseExit()
 
-	// Phase 1: Inside the hive, heading for the exit door
-	if !b.IsOutside {
+		}
 		if !b.hasTarget {
-			b.targetX = clamp(h.ExitX+rand.Intn(3)-1, 1, h.width-2)
-			b.targetY = clamp(h.ExitY+rand.Intn(3)-1, 1, h.height-2)
+			b.targetX = clamp(b.exitTargetX+rand.Intn(3)-1, 1, h.Width-2)
+			b.targetY = clamp(b.exitTargetY+rand.Intn(3)-1, 1, h.Height-2)
 			b.hasTarget = true
 		}
 
 		// Near exit door check
-		if abs(b.X-h.ExitX) <= 1 && abs(b.Y-h.ExitY) <= 1 {
+		if abs(b.X-b.exitTargetX) <= 1 && abs(b.Y-b.exitTargetY) <= 1 {
 			// 1. CHECK YOUR CAP HERE
-			if h.amountOutside < h.maxOutside {
+			if h.AmountOutside < h.MaxOutside {
 				if rand.Float64() < 0.30 {
 					h.vacate(b.X, b.Y)
-					b.IsOutside = true
-					h.amountOutside++ // INCREMENT YOUR COUNTER
+					err := b.FSM.Fire(EventWentOutside)
+					if err != nil {
+						slog.Fatal(err)
+					}
+					h.AmountOutside++
+					b.exitTargetX = 0
+					b.exitTargetY = 0
 					b.TaskTimer = 40 + rand.Intn(60)
-					b.hasTarget = false
 				}
 			} else {
 				// 2. CLEAR THE DOORWAY
 				// If it's full, cancel foraging and send them back to wait at storage
-				b.Task = Wander
-				b.hasTarget = false
+
+				fmt.Println("STATE WANDER")
+				b.FSM.Fire(EventWander)
 				b.TaskCooldown = 30 + rand.Intn(30)
 
 				storage := h.nearestStorageWithSpace(b.X, b.Y)
 				if storage != nil {
-					x, y, ok := h.RandomCellNear(storage.centerX, storage.centerY, 4, Empty)
+					x, y, ok := h.RandomCellNear(storage.CenterX, storage.CenterY, 4, Empty)
 					if ok {
 						b.targetX = x
 						b.targetY = y
-						b.hasTarget = true
 					}
 				}
 			}
 		}
-		return
-	}
+	case StateOutside:
+		if b.TaskTimer <= 0 {
+			b.FSM.Fire(EventHarvestedHoney)
+			h.AmountOutside--
 
-	// Phase 2: Outside, performing foraging work until timer runs out
-	if b.IsOutside && b.TaskTimer <= 0 {
-		b.IsOutside = false
-		h.amountOutside-- // DECREMENT YOUR COUNTER
+			// Move the bee to the entrance coordinates before occupying the grid
+			eX, eY := h.ChooseEntrance()
+			b.X = eX
+			b.Y = eY
+			h.Occupy(b.X, b.Y)
 
-		h.occupy(b.X, b.Y)
-		b.CarryingHoney = true
-		b.PrevTask = Forage
-		b.hasTarget = false
-		b.Task = SupplyToStorage
-		b.TaskCooldown = rand.Intn(120)
-	}
-}
-
-func (h *Hive) TaskSupplyToStorage(b *Bee) {
-	b.Task = SupplyToStorage
-
-	// If the depot we were heading to filled up while en route, pick another.
-	if b.TargetStorage != nil && b.TargetStorage.storedAmount >= b.TargetStorage.capacity {
-		b.TargetStorage = nil
-		b.hasTarget = false
-	}
-
-	if b.TargetStorage == nil {
-		storage := h.nearestStorageWithSpace(b.X, b.Y)
-		if storage == nil {
-			b.Task = Wander
+			b.Carrying = true
 			b.hasTarget = false
-			return
 		}
-		b.TargetStorage = storage
-	}
-	storage := b.TargetStorage
-
-	if !b.hasTarget {
-		x, y, ok := h.RandomCellNear(storage.centerX, storage.centerY, 5, Empty)
-		if !ok {
+	case StateBringingHoneyToStorage:
+		// If the depot we were heading to filled up while en route, pick another.
+		if b.TargetStorage != nil && b.TargetStorage.storedAmount >= b.TargetStorage.capacity {
 			b.TargetStorage = nil
-			b.Task = Wander
 			b.hasTarget = false
-			return
 		}
-		b.targetX = x
-		b.targetY = y
-		b.hasTarget = true
-	}
 
-	if abs(b.X-b.targetX) <= 1 && abs(b.Y-b.targetY) <= 1 {
-		b.CarryingHoney = false
-		h.UpdateCellState(b.targetX, b.targetY, Honey)
-		storage.storedAmount++
-		b.PrevTask = SupplyToStorage
-		b.Task = Wander
-		b.hasTarget = false
-		b.TargetStorage = nil
-		b.TaskCooldown = 20 + rand.Intn(30)
+		if b.TargetStorage == nil {
+			storage := h.nearestStorageWithSpace(b.X, b.Y)
+			if storage == nil {
+				b.FSM.Fire(EventWander)
+				b.hasTarget = false
+				return
+			}
+			b.TargetStorage = storage
+		}
+		storage := b.TargetStorage
+
+		if !b.hasTarget {
+			x, y, ok := h.RandomCellNear(storage.CenterX, storage.CenterY, 5, Empty)
+			if !ok {
+				fmt.Println("wandering because no target")
+
+				b.TargetStorage = nil
+				b.Task = Wander
+				b.hasTarget = false
+				return
+			}
+			b.targetX = x
+			b.targetY = y
+			b.hasTarget = true
+		}
+
+		if abs(b.X-b.targetX) <= 1 && abs(b.Y-b.targetY) <= 1 {
+			b.Carrying = false
+			h.UpdateCellState(b.targetX, b.targetY, Honey)
+			storage.storedAmount++
+			b.FSM.Fire(EventStoredHoney)
+			b.hasTarget = false
+			b.TargetStorage = nil
+			b.TaskCooldown = 50 + rand.Intn(100)
+		}
 	}
 }
-
 func (h *Hive) TaskCollectFromStorage(b *Bee) {
-	b.Task = CollectFromStorage
-
-	// If the depot we were heading to emptied out while en route, pick another.
-	if b.TargetStorage != nil && b.TargetStorage.storedAmount <= 0 {
-		b.TargetStorage = nil
-		b.hasTarget = false
-	}
-
-	if b.TargetStorage == nil {
-		storage := h.nearestStorageWithHoney(b.X, b.Y)
-		if storage == nil {
-			b.Task = Wander
-			b.hasTarget = false
-			return
-		}
-		b.TargetStorage = storage
-	}
-	storage := b.TargetStorage
-
-	if !b.hasTarget {
-		x, y, ok := h.RandomCellNear(storage.centerX, storage.centerY, 5, Honey)
-		if !ok {
+	state := b.State
+	switch state {
+	case StateCollectingHoneyFromStorage:
+		// If the depot we were heading to emptied out while en route, pick another.
+		if b.TargetStorage != nil && b.TargetStorage.storedAmount <= 0 {
 			b.TargetStorage = nil
-			b.Task = Wander
+			b.hasTarget = false
+		}
+
+		if b.TargetStorage == nil {
+			storage := h.nearestStorageWithHoney(b.X, b.Y)
+			if storage == nil {
+				b.FSM.Fire(EventWander)
+				b.hasTarget = false
+				return
+			}
+			b.TargetStorage = storage
+		}
+		storage := b.TargetStorage
+		if !b.hasTarget {
+			x, y, ok := h.RandomCellNear(storage.CenterX, storage.CenterY, 5, Honey)
+			if !ok {
+				b.TargetStorage = nil
+				b.FSM.Fire(EventWander)
+				b.hasTarget = false
+				return
+			}
+			b.targetX = x
+			b.targetY = y
+			b.hasTarget = true
+		}
+
+		if abs(b.X-b.targetX) <= 1 && abs(b.Y-b.targetY) <= 1 {
+			h.UpdateCellState(b.targetX, b.targetY, Empty)
+			if storage.storedAmount > 0 {
+				storage.storedAmount--
+			}
+			b.FSM.Fire(EventCollectedHoney)
+			b.hasTarget = false
+			b.TargetStorage = nil
+		}
+	case StateSupplyingHoneyToQueen:
+		Queen := h.GetQueen()
+
+		if Queen == nil {
+			b.FSM.Fire(EventWander)
 			b.hasTarget = false
 			return
 		}
-		b.targetX = x
-		b.targetY = y
+
+		// Continually track the Queen's active position each frame
+		b.targetX = Queen.X
+		b.targetY = Queen.Y
 		b.hasTarget = true
-	}
 
-	if abs(b.X-b.targetX) <= 1 && abs(b.Y-b.targetY) <= 1 && !b.CarryingHoney {
-		b.CarryingHoney = true
-		h.UpdateCellState(b.targetX, b.targetY, Empty)
-		if storage.storedAmount > 0 {
-			storage.storedAmount--
+		// Increased reach distance slightly (within 1 cells) to make handoffs fluid
+		if abs(b.X-Queen.X) <= 1 && abs(b.Y-Queen.Y) <= 2 {
+			b.Carrying = false
+			Queen.Carrying = true
+			b.FSM.Fire(EventDeliveredHoney)
+			b.hasTarget = false
+			b.TaskCooldown = 10
 		}
-		b.PrevTask = CollectFromStorage
-		b.Task = SupplyToQueen
-		b.hasTarget = false
-		b.TargetStorage = nil
-	}
-}
-
-func (h *Hive) TaskSupplyToQueen(b *Bee) {
-	b.Task = SupplyToQueen
-	queen := h.GetQueen()
-
-	if queen == nil {
-		b.Task = Wander
-		b.hasTarget = false
-		return
-	}
-
-	// Continually track the Queen's active position each frame
-	b.targetX = queen.X
-	b.targetY = queen.Y
-	b.hasTarget = true
-
-	// Increased reach distance slightly (within 1 cells) to make handoffs fluid
-	if abs(b.X-queen.X) <= 1 && abs(b.Y-queen.Y) <= 2 {
-		b.CarryingHoney = false
-		queen.CarryingHoney = true
-		b.PrevTask = SupplyToQueen
-		b.Task = Wander
-		b.hasTarget = false
-		b.TaskCooldown = 10
 	}
 }
 
 func (h *Hive) TaskLayEggs(b *Bee) {
-	b.Task = LayEggs
+	state := b.State
+	switch state {
+	case StateCarryingHoney:
+		regionRadius := 1
+		x, y, ok := h.RandomCellNear(b.X, b.Y, regionRadius, Empty)
+		if !ok {
+			b.hasTarget = false
+			return
+		}
 
-	regionRadius := 1
-	x, y, ok := h.RandomCellNear(b.X, b.Y, regionRadius, Empty)
-	if !ok {
-		b.Task = Wander
-		b.hasTarget = false
-		return
-	}
+		if h.Grid[y][x].State == Empty && b.Carrying {
+			h.UpdateCellState(x, y, Egg)
+			h.Eggs++
+			b.Carrying = false
 
-	if h.Grid[y][x].State == Empty && b.CarryingHoney {
-		h.UpdateCellState(x, y, Egg)
-		h.eggs++
-		b.CarryingHoney = false
-		b.Task = Wander
-		b.hasTarget = false
-		b.TaskCooldown = 15
+			err := b.FSM.Fire(EventEggPlaced)
+			if err != nil {
+				slog.Errorf("Queen FSM Error (EventEggPlaced): %v", err)
+			}
+
+			b.hasTarget = false
+			b.TaskCooldown = 15
+		}
 	}
 }

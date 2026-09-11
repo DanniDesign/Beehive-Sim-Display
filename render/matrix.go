@@ -3,9 +3,10 @@
 package render
 
 import (
-	"beehive-sim2/simulation"
 	"image"
 	"image/draw"
+
+	"github.com/DanniDesign/Beehive-Sim-Display/simulation"
 )
 
 func DrawHiveToImage(img *image.RGBA, h *simulation.Hive) {
@@ -23,10 +24,9 @@ func DrawHiveToImage(img *image.RGBA, h *simulation.Hive) {
 		}
 	}
 
-	img.Set(h.ExitX, h.ExitY, ColorExit)
-
-	for _, bee := range h.Bees() {
-		if bee.IsOutside {
+	for _, bee := range h.GetBees() {
+		state := bee.State
+		if state == simulation.StateOutside {
 			continue
 		}
 		img.Set(bee.X, bee.Y, bee.GetColor(h.Tick))

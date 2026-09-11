@@ -3,29 +3,30 @@
 package render
 
 import (
-	"beehive-sim2/simulation"
 	"image"
+
+	"github.com/DanniDesign/Beehive-Sim-Display/simulation"
 
 	"github.com/hajimehoshi/ebiten/v2"
 )
 
 type DesktopRenderer struct {
-	width        int
-	height       int
+	Width        int
+	Height       int
 	scale        int
 	currentImage image.Image
 }
 
-func NewRenderer(width, height, scale int) (Renderer, error) {
+func NewRenderer(Width, Height, scale int) (Renderer, error) {
 	return &DesktopRenderer{
-		width:  width,
-		height: height,
+		Width:  Width,
+		Height: Height,
 		scale:  scale,
 	}, nil
 }
 
 func (r *DesktopRenderer) Init() error {
-	ebiten.SetWindowSize(r.width*r.scale, r.height*r.scale)
+	ebiten.SetWindowSize(r.Width*r.scale, r.Height*r.scale)
 	ebiten.SetWindowTitle("Beehive Simulation Preview")
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 	return nil
@@ -54,7 +55,7 @@ func (r *DesktopRenderer) Draw(screen *ebiten.Image) {
 }
 
 func (r *DesktopRenderer) Layout(outsideWidth, outsideHeight int) (int, int) {
-	return r.width * r.scale, r.height * r.scale
+	return r.Width * r.scale, r.Height * r.scale
 }
 
 var CellSize = 1
@@ -74,10 +75,10 @@ func DrawHive(screen *ebiten.Image, h *simulation.Hive) {
 		}
 	}
 
-	screen.Set(h.ExitX, h.ExitY, ColorExit)
+	for _, bee := range h.GetBees() {
+		state := bee.State
 
-	for _, bee := range h.Bees() {
-		if bee.IsOutside {
+		if state == simulation.StateOutside {
 			continue
 		}
 		screen.Set(bee.X, bee.Y, bee.GetColor(h.Tick))

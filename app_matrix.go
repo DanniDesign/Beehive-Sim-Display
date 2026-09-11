@@ -7,9 +7,8 @@ import (
 	"log"
 	"time"
 
-	"beehive-sim2/render"
-	"beehive-sim2/simulation"
-
+	"github.com/DanniDesign/Beehive-Sim-Display/render"
+	"github.com/DanniDesign/Beehive-Sim-Display/simulation"
 	rgbmatrix "github.com/mcuadros/go-rpi-rgb-led-matrix"
 )
 

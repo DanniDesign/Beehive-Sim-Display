@@ -3,21 +3,38 @@ package simulation
 import (
 	"image/color"
 	"math/rand"
+
+	"github.com/gookit/slog"
 )
 
 func (h *Hive) Update() {
+
 	h.Age += 1
 	h.Tick += 1
-
 	// Single O(n) pass: check whether an attendant exists, and remember the
 	// first forager as a promotion candidate in case one is needed. This
 	// still promotes at most ONE bee per tick (matching the original
 	// behavior) instead of computing a stale hasAttendant flag and handing
 	// it to every forager, which would let all of them self-promote in the
 	// same tick the instant the hive's last attendant dies of old age.
+	// Pass 1: resync every bee's cached State from its FSM. This must
+	// cover the full slice unconditionally — breaking out early here
+	// (as a prior version did, once the first QueenAttendant was seen)
+	// leaves every later bee's State stale for this whole tick. A bee
+	// that already transitioned in a previous tick can then be read as
+	// still being in its old state by this tick's task logic, which
+	// fires events that don't match its *real*, unsynced FSM state —
+	// that's what caused the StateOutside/EventWander panic.
+	for _, b := range h.Bees {
+		b.State = b.FSM.MustState().(State)
+	}
+
+	// Pass 2: is there a QueenAttendant, and if not, who's the first
+	// Forager we could promote? Safe to stop early here — this pass
+	// only reads Role, it doesn't touch State.
 	hasAttendant := false
 	var promotable *Bee
-	for _, b := range h.bees {
+	for _, b := range h.Bees {
 		if b.Role == QueenAttendant {
 			hasAttendant = true
 			break
@@ -30,13 +47,22 @@ func (h *Hive) Update() {
 		promotable.Role = QueenAttendant
 		promotable.Task = Wander
 		promotable.hasTarget = false
+		// The bee keeps its old ForagerFSM otherwise, which has no
+		// transitions configured for QueenAttendant states/events —
+		// firing one of those on it is what was crashing UpdateState.
+		if fsm := h.newFSMFor(promotable); fsm != nil {
+			promotable.FSM = fsm
+		}
 	}
 
-	beesCopy := make([]*Bee, len(h.bees))
-	copy(beesCopy, h.bees)
+	beesCopy := make([]*Bee, len(h.Bees))
+	copy(beesCopy, h.Bees)
 
 	for _, bee := range beesCopy {
 		h.AgeBee(bee)
+		if bee.Age > 1.0 {
+			continue
+		}
 		h.UpdateTask(bee)
 		moveChance := 1.0 - bee.Age
 		if rand.Float64() < moveChance {
@@ -44,10 +70,10 @@ func (h *Hive) Update() {
 		}
 	}
 
-	// Only visit cells that are actually eggs, instead of scanning the
+	// Only visit cells that are actually Eggs, instead of scanning the
 	// whole grid every tick.
-	for key := range h.eggCells {
-		x, y := key%h.width, key/h.width
+	for key := range h.EggCells {
+		x, y := key%h.Width, key/h.Width
 		h.AgeEgg(x, y)
 	}
 
@@ -58,7 +84,8 @@ func (h *Hive) Update() {
 }
 
 func (h *Hive) UpdateTask(b *Bee) {
-	if b.TaskTimer > 0 && b.IsOutside {
+	state := b.State
+	if b.TaskTimer > 0 && state == StateOutside {
 		b.TaskTimer--
 	}
 	if b.TaskCooldown > 0 {
@@ -68,67 +95,56 @@ func (h *Hive) UpdateTask(b *Bee) {
 
 	switch b.Role {
 	case Forager:
-		if b.CarryingHoney {
-			h.TaskSupplyToStorage(b)
-			return
-		}
-
-		if b.Task == Forage {
-			h.TaskForage(b)
-			return
-		}
-
-		if h.TotalStorageStored() < h.TotalStorageCapacity() {
-			if rand.Float64() < 0.15 && h.amountOutside < h.maxOutside {
-				b.Task = Forage
-				b.hasTarget = false
-				h.TaskForage(b)
+		switch state {
+		case StateWandering:
+			// If storage is not full and there is not too many bees outside, forage.
+			if h.TotalStorageStored() < h.TotalStorageCapacity() && rand.Float64() < 0.15 && h.AmountOutside < h.MaxOutside {
+				h.UpdateState(b, EventHoneySupplyLow)
 				return
 			}
+			// Otherwise keep wandering
+			return
+		default:
+			h.TaskForage(b)
 		}
-
-		b.Task = Wander
-		b.hasTarget = false
 
 	case QueenAttendant:
-		// 1. If carrying honey, head to the Queen to supply her
-		if b.CarryingHoney {
-			h.TaskSupplyToQueen(b)
-			return
-		}
+		switch state {
+		case StateWandering:
+			Queen := h.GetQueen()
+			queenNeedsHoney := Queen != nil && !Queen.Carrying && h.TotalStorageStored() > 0 && h.Eggs < h.MaxEggs()
 
-		// 2. If already on a mission to fetch honey from storage, keep doing it
-		if b.Task == CollectFromStorage {
+			if queenNeedsHoney {
+				if b.Carrying {
+					b.FSM.Fire(EventHoneyNeeded)
+				} else {
+					b.FSM.Fire(EventNoHoneyOnHand)
+				}
+			}
+		default:
 			h.TaskCollectFromStorage(b)
-			return
 		}
-
-		// 3. Only START a new collection mission if conditions are met AND using a low tick roll
-		queen := h.GetQueen()
-		if queen != nil && !queen.CarryingHoney && h.TotalStorageStored() > 0 && h.eggs < h.MaxEggs() {
-			// Roll chance (e.g., 5-10%) so attendants stagger their runs
-			b.Task = CollectFromStorage
-			b.hasTarget = false
-			h.TaskCollectFromStorage(b)
-			return
-		}
-
-		// Otherwise, wander
-		b.Task = Wander
-		b.hasTarget = false
 
 	case Queen:
-		if b.CarryingHoney {
+		if b.Carrying && state != StateCarryingHoney {
+			err := b.FSM.Fire(EventReceivedHoney)
+			if err != nil {
+				slog.Errorf("Queen FSM Error (EventReceivedHoney): %v", err)
+			}
+			return
+		}
+
+		switch state {
+		case StateCarryingHoney:
 			h.TaskLayEggs(b)
-		} else {
-			b.Task = Wander
+		default:
 			b.hasTarget = false
 		}
 	}
 }
 
 // UpdateCellState is the single place cell state changes, so it's also the
-// single place the egg-position index (h.eggCells) is kept in sync.
+// single place the egg-position index (h.EggCells) is kept in sync.
 func (h *Hive) UpdateCellState(x, y int, state CellState) {
 	var clr color.RGBA
 	switch state {
@@ -146,11 +162,11 @@ func (h *Hive) UpdateCellState(x, y int, state CellState) {
 		Color: clr,
 	}
 
-	key := y*h.width + x
+	key := y*h.Width + x
 	if prev == Egg && state != Egg {
-		delete(h.eggCells, key)
+		delete(h.EggCells, key)
 	} else if state == Egg && prev != Egg {
-		h.eggCells[key] = struct{}{}
+		h.EggCells[key] = struct{}{}
 	}
 }
 
@@ -161,13 +177,13 @@ func (h *Hive) AgeEgg(x, y int) error {
 		return nil
 	}
 
-	if cell.eggAge >= 1.0 {
+	if cell.EggAge >= 1.0 {
 		h.HatchEgg(x, y)
 		return nil
 	}
 
 	if rand.Float64() < 0.30 {
-		cell.eggAge += 0.02
+		cell.EggAge += 0.02
 	}
 
 	r, g, b, _ := cell.Color.RGBA()
@@ -213,12 +229,24 @@ func (h *Hive) HatchEgg(x, y int) {
 	}
 
 	newBee := h.SpawnBee(x, y, chosen)
-	h.bees = append(h.bees, newBee)
-	h.occupy(newBee.X, newBee.Y)
-	h.eggs--
+	newBee.FSM = h.newFSMFor(newBee)
+	if newBee.FSM == nil {
+		// Fail loudly right here instead of leaving a bee with a nil FSM
+		// that panics on some later tick as soon as anything calls
+		// b.FSM.MustState()/.Fire() on it. If you hit this, it means
+		// SetFSMFactories was never called (or was called with a nil
+		// entry for this role) before the simulation started running —
+		// add hive.SetFSMFactories(...) + hive.AssignFSMs() right after
+		// simulation.NewHive(...) in main.go.
+		slog.Fatalf("HatchEgg: no FSM factory registered for role %v — call Hive.SetFSMFactories before running the simulation", chosen)
+	}
+	h.Bees = append(h.Bees, newBee)
+	h.Occupy(newBee.X, newBee.Y)
+	h.Eggs--
 }
 
 func (h *Hive) AgeBee(bee *Bee) {
+	state := bee.State
 	var beeAgeIncrement float64
 	switch bee.Role {
 	case Queen:
@@ -228,16 +256,16 @@ func (h *Hive) AgeBee(bee *Bee) {
 	default:
 		beeAgeIncrement = 0.0012
 	}
-	bee.Age += beeAgeIncrement
+	bee.Age += beeAgeIncrement * bee.ageRate
 
 	if bee.Age > 1.0 {
-		if bee.CarryingHoney && h.TotalStorageStored() < h.TotalStorageCapacity()+15 {
+		if bee.Carrying && h.TotalStorageStored() < h.TotalStorageCapacity()+15 {
 			if rand.Float64() < 0.2 {
 				h.UpdateCellState(bee.X, bee.Y, Honey)
 			}
 		}
-		if bee.IsOutside {
-			h.amountOutside--
+		if state == StateOutside {
+			h.AmountOutside--
 		}
 		h.RemoveBee(bee)
 	}

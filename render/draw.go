@@ -14,10 +14,11 @@ type Setter interface {
 // Draw renders the comb, the entrance and the bees. Cells are dimmed at
 // night so the display follows the simulated day.
 func Draw(dst Setter, h *simulation.Hive) {
-	light := 0.35 + 0.65*h.Daylight()
+	daylight := h.Daylight()
+	cells := CellDim(daylight)
 	for y := range h.Grid {
 		for x := range h.Grid[y] {
-			dst.Set(x, y, dim(cellColor(h, x, y), light))
+			dst.Set(x, y, dim(cellColor(h, x, y), cells))
 		}
 	}
 	dst.Set(h.ExitX, h.ExitY, ColorExit)
@@ -31,12 +32,21 @@ func Draw(dst Setter, h *simulation.Hive) {
 			queen = b
 			continue
 		}
-		dst.Set(b.X, b.Y, dim(b.GetColor(h.Tick), 0.5+0.5*light))
+		dst.Set(b.X, b.Y, dim(b.GetColor(h.Tick), BeeDim(daylight)))
 	}
 	if queen != nil {
 		dst.Set(queen.X, queen.Y, queen.GetColor(h.Tick)) // always on top
 	}
 }
+
+// NightCellFloor is how bright the comb stays at night, as a fraction of
+// its daytime brightness.
+const NightCellFloor = 0.45
+
+// CellDim and BeeDim scale comb and bee colours with daylight (0..1), so
+// the display follows the simulated day; bees dim less than the comb.
+func CellDim(daylight float64) float64 { return NightCellFloor + (1-NightCellFloor)*daylight }
+func BeeDim(daylight float64) float64  { return 0.5 + 0.5*daylight }
 
 func cellColor(h *simulation.Hive, x, y int) color.RGBA {
 	c := &h.Grid[y][x]

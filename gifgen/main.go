@@ -11,6 +11,7 @@ import (
 	"image/png"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"beehive-sim2/render"
@@ -46,7 +47,7 @@ var font = map[rune][5]string{
 	'8': {"111", "101", "111", "101", "111"}, '9': {"111", "101", "111", "001", "110"},
 	' ': {"000", "000", "000", "000", "000"}, ':': {"000", "010", "000", "010", "000"},
 	'!': {"010", "010", "010", "000", "010"}, '-': {"000", "000", "111", "000", "000"},
-	'.': {"000", "000", "000", "000", "010"}, '/': {"001", "001", "010", "100", "100"},
+	'.': {"000", "000", "000", "000", "010"}, '+': {"000", "010", "111", "010", "000"}, '/': {"001", "001", "010", "100", "100"},
 }
 
 func text(img *image.RGBA, s string, x, y, sc int, c color.RGBA) {
@@ -308,8 +309,97 @@ func legend(name string) {
 	fmt.Println(name)
 }
 
+// rawDots draws the frame's colour values straight onto LED dots (this is
+// what the earlier GIFs showed, before modelling the panel).
+func rawDots(small *image.RGBA) *image.RGBA {
+	img := image.NewRGBA(image.Rect(0, 0, W*cell, H*cell))
+	for i := 3; i < len(img.Pix); i += 4 {
+		img.Pix[i] = 255
+	}
+	for y := 0; y < H; y++ {
+		for x := 0; x < W; x++ {
+			c := small.RGBAAt(x, y)
+			if c.R|c.G|c.B == 0 {
+				c = color.RGBA{14, 14, 14, 255}
+			}
+			for dy := 0; dy < cell-1; dy++ {
+				for dx := 0; dx < cell-1; dx++ {
+					img.SetRGBA(x*cell+dx, y*cell+dy, c)
+				}
+			}
+		}
+	}
+	return img
+}
+
+// panelFrames renders one hive at the given day of year, at noon and at
+// night, as raw 64x32 frames.
+func panelFrames(seed int64, doy int) (day, night *image.RGBA) {
+	h := newHive(seed)
+	for int(h.DayOfYear()) != doy || h.TimeOfDay() < 0.5 {
+		h.Update()
+	}
+	day = image.NewRGBA(image.Rect(0, 0, W, H))
+	render.Draw(day, h)
+	for h.TimeOfDay() > 0.04 {
+		h.Update()
+	}
+	night = image.NewRGBA(image.Rect(0, 0, W, H))
+	render.Draw(night, h)
+	return day, night
+}
+
+// contactSheet: rows are rendering stages, columns day and night.
+func contactSheet(name string, seed int64, doy int, sigma float64, rows []string) {
+	day, night := panelFrames(seed, doy)
+	pw, ph, lab, gap := W*cell, H*cell, 18, 10
+	img := image.NewRGBA(image.Rect(0, 0, 2*pw+3*gap, len(rows)*(ph+lab+gap)+gap))
+	for i := 3; i < len(img.Pix); i += 4 {
+		img.Pix[i] = 255
+	}
+	for r, stage := range rows {
+		y0 := gap + r*(ph+lab+gap)
+		text(img, stage, gap, y0, 2, color.RGBA{255, 220, 60, 255})
+		for c, f := range []*image.RGBA{day, night} {
+			var p *image.RGBA
+			switch stage {
+			case "AS DRAWN":
+				p = rawDots(f)
+			case "PANEL":
+				p = render.PanelPreview(f, cell, 0)
+			default:
+				p = render.PanelPreview(f, cell, sigma)
+			}
+			x0 := gap + c*(pw+gap)
+			for y := 0; y < ph; y++ {
+				for x := 0; x < pw; x++ {
+					img.SetRGBA(x0+x, y0+lab+y, p.RGBAAt(x, y))
+				}
+			}
+		}
+	}
+	text(img, "DAY", gap+pw-30, gap, 2, color.RGBA{150, 150, 150, 255})
+	text(img, "NIGHT", 2*gap+2*pw-46, gap, 2, color.RGBA{150, 150, 150, 255})
+	f, _ := os.Create(name)
+	png.Encode(f, img)
+	f.Close()
+	fmt.Println(name)
+}
+
 func main() {
 	out := os.Args[1]
+	if len(os.Args) > 2 && os.Args[2] == "preview" {
+		sigma := 0.8
+		if len(os.Args) > 3 {
+			sigma, _ = strconv.ParseFloat(os.Args[3], 64)
+		}
+		rows := []string{"AS DRAWN", "PANEL", "PANEL + DIFFUSER"}
+		if len(os.Args) > 4 {
+			rows = os.Args[4:]
+		}
+		contactSheet(out+"/panel-preview.png", 4, 140, sigma, rows)
+		return
+	}
 	if len(os.Args) > 2 && os.Args[2] == "legend" {
 		legend(out + "/colour-key.png")
 		return

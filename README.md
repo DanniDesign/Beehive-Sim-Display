@@ -62,8 +62,8 @@ The model follows real *Apis mellifera* biology, scaled down to a 64x32 comb:
 | off-white / green / brown | egg / larva (grows brighter) / capped brood |
 | faint brown | empty wax comb |
 | purple | queen cell |
-| pale gold / bright gold | nectar / capped honey |
-| orange-red | pollen |
+| greenish yellow / amber | nectar / capped honey |
+| orange | pollen |
 | cyan | entrance |
 
 ## Running
@@ -72,6 +72,15 @@ The model follows real *Apis mellifera* biology, scaled down to a 64x32 comb:
 go run .                                  # desktop preview
 ./deploy.sh                               # cross-compile for the Pi and deploy
 ```
+
+## Colours on the LED panel
+
+The matrix library already applies CIE1931 luminance correction, so the
+code does not gamma-correct. `render/panel.go` models that correction and a
+diffuser so `gifgen preview` shows the light that reaches the viewer, and
+`render/separation_test.go` checks that key colours stay distinguishable in
+the places they appear (queen among nurses, nectar next to honey, comb
+against the dark cavity), by day and at night.
 
 ## Testing the model
 
@@ -82,6 +91,8 @@ go run ./cmd/montecarlo -trace -seed 7        # one colony, day by day
 go run -tags matrix ./gifgen out/          # render GIFs of the LED display (no screen needed)
 go run -tags matrix ./gifgen out/ gallery  # 8 hives side by side, July and January
 go run -tags matrix ./gifgen out/ legend   # colour key image
+go run -tags matrix ./gifgen out/ preview 0.8  # how the panel looks behind a diffuser (sigma in LED pitches)
+go test -tags matrix ./render              # colour separation behind the diffuser
 ```
 
 The simulation is deterministic for a given seed (`simulation.NewHiveWithSeed`),

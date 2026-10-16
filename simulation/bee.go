@@ -933,7 +933,7 @@ func (b *Bee) GetColor(tick int) color.Color {
 	case b.Load == Pollen:
 		return color.RGBA{255, 110, 0, 255} // orange pollen baskets
 	case b.Role == Cleaner || b.Role == Nurse:
-		return color.RGBA{140, 140, 160, 255} // young, fuzzy house bees
+		return color.RGBA{110, 110, 140, 255} // young, fuzzy house bees (dimmer than older bees)
 	}
 	return color.RGBA{255, 255, 255, 255}
 }

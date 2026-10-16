@@ -20,7 +20,7 @@ func RunApp(hive *simulation.Hive, cfg Config) error {
 		ChainLength:     1,
 		Parallel:        1,
 		PWMBits:         11,
-		Brightness:      55,
+		Brightness:      render.PanelBrightness, // the preview (gifgen preview) models the same value
 		HardwareMapping: "adafruit-hat",
 	}
 

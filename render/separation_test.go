@@ -15,7 +15,7 @@ import (
 // width, at full daylight and at night, and measure perceptual distances
 // (CIELAB delta E) between the light that reaches the viewer.
 
-const testSigma = 0.8 // diffuser width in LED pitches, as in gifgen's preview
+const testSigma = 0.8 // diffuser width in LED pitches; stronger than the real one, for margin
 
 type keyColour struct {
 	name string

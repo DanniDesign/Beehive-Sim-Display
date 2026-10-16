@@ -389,7 +389,7 @@ func contactSheet(name string, seed int64, doy int, sigma float64, rows []string
 func main() {
 	out := os.Args[1]
 	if len(os.Args) > 2 && os.Args[2] == "preview" {
-		sigma := 0.4 // the real diffuser blurs less than the 0.8 the colour test uses
+		sigma := 0.3 // matches a photo of the real panel; the colour test uses a stricter 0.8
 		if len(os.Args) > 3 {
 			sigma, _ = strconv.ParseFloat(os.Args[3], 64)
 		}

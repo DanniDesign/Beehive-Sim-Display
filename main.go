@@ -18,7 +18,9 @@ func main() {
 		FPS:    5,
 	}
 
-	hive := simulation.NewHive(4, cfg.Width, cfg.Height)
+	// An overwintered colony in mid-March: ~120 workers, a mated queen,
+	// a small brood nest and the remains of last year's honey.
+	hive := simulation.NewHive(120, cfg.Width, cfg.Height)
 
 	if err := RunApp(hive, cfg); err != nil {
 		log.Fatalf("Application error: %v", err)

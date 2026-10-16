@@ -60,26 +60,5 @@ func (r *DesktopRenderer) Layout(outsideWidth, outsideHeight int) (int, int) {
 var CellSize = 1
 
 func DrawHive(screen *ebiten.Image, h *simulation.Hive) {
-	screen.Fill(ColorVoid)
-
-	for y := range h.Grid {
-		for x := range h.Grid[y] {
-			cell := h.Grid[y][x]
-			switch cell.State {
-			case simulation.Honey:
-				screen.Set(x, y, ColorHoney)
-			case simulation.Egg:
-				screen.Set(x, y, ColorBrood)
-			}
-		}
-	}
-
-	screen.Set(h.ExitX, h.ExitY, ColorExit)
-
-	for _, bee := range h.Bees() {
-		if bee.IsOutside {
-			continue
-		}
-		screen.Set(bee.X, bee.Y, bee.GetColor(h.Tick))
-	}
+	Draw(screen, h)
 }

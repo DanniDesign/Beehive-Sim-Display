@@ -69,6 +69,7 @@ go run .                                  # desktop preview
 go test ./simulation                      # invariants over many colonies, seasonal checks
 go run ./cmd/montecarlo -runs 1000 -years 3   # Monte Carlo statistics
 go run ./cmd/montecarlo -trace -seed 7        # one colony, day by day
+go run -tags matrix ./gifgen out/          # render GIFs of the LED display (no screen needed)
 ```
 
 The simulation is deterministic for a given seed (`simulation.NewHiveWithSeed`),

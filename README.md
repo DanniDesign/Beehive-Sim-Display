@@ -81,6 +81,7 @@ go run ./cmd/montecarlo -runs 1000 -years 3   # Monte Carlo statistics
 go run ./cmd/montecarlo -trace -seed 7        # one colony, day by day
 go run -tags matrix ./gifgen out/          # render GIFs of the LED display (no screen needed)
 go run -tags matrix ./gifgen out/ gallery  # 8 hives side by side, July and January
+go run -tags matrix ./gifgen out/ legend   # colour key image
 ```
 
 The simulation is deterministic for a given seed (`simulation.NewHiveWithSeed`),

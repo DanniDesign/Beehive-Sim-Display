@@ -84,7 +84,7 @@ func date(doy float64) string {
 	return "28 FEB"
 }
 
-func frame(h *simulation.Hive, banner string, clock bool) *image.RGBA {
+func frame(h *simulation.Hive) *image.RGBA {
 	small := image.NewRGBA(image.Rect(0, 0, W, H))
 	render.Draw(small, h)
 	big := image.NewRGBA(image.Rect(0, 0, outW, outH))
@@ -104,30 +104,8 @@ func frame(h *simulation.Hive, banner string, clock bool) *image.RGBA {
 			}
 		}
 	}
-	s := h.Snapshot()
-	grey := color.RGBA{170, 170, 170, 255}
-	y0 := H*cell + 4
-	left := date(s.DayOfYear)
-	if clock {
-		m := int(h.TimeOfDay() * 24 * 60)
-		left += fmt.Sprintf(" %02d:%02d", m/60, m%60)
-	}
-	text(big, left, 4, y0, 2, grey)
-	info := fmt.Sprintf("BEES %d  HONEY %d", s.Counts.Workers+s.Counts.Drones, int(s.Honey+s.Nectar))
-	if s.Dead {
-		info = "EMPTY HIVE"
-	}
-	text(big, info, outW-4-len(info)*8, y0, 2, grey)
-	if banner != "" {
-		text(big, banner, (outW-len(banner)*8)/2, y0+12, 2, color.RGBA{255, 220, 60, 255})
-	} else {
-		seasons := []string{"SPRING", "SUMMER", "AUTUMN", "WINTER"}
-		st := seasons[s.Season]
-		if h.Raining() {
-			st += " - RAIN"
-		}
-		text(big, st, 4, y0+12, 2, color.RGBA{90, 90, 90, 255})
-	}
+	m := int(h.TimeOfDay() * 24 * 60)
+	text(big, fmt.Sprintf("%s  %02d:%02d", date(h.DayOfYear()), m/60, m%60), 4, H*cell+4, 2, color.RGBA{170, 170, 170, 255})
 	return big
 }
 
@@ -201,71 +179,23 @@ func newHive(seed int64) *simulation.Hive {
 	return simulation.NewHiveWithSeed(seed, 120, W, H, simulation.DefaultParams())
 }
 
-// events turns changes in the cumulative counters into a banner.
-func events(prev, cur simulation.Counters) string {
-	switch {
-	case cur.Recolonizations > prev.Recolonizations:
-		return "A WILD SWARM MOVES IN!"
-	case cur.Collapses > prev.Collapses:
-		return "THE COLONY HAS DIED"
-	case cur.Swarms > prev.Swarms:
-		return "SWARM! OLD QUEEN LEAVES"
-	case cur.QueensLostMating > prev.QueensLostMating:
-		return "QUEEN LOST ON MATING FLIGHT"
-	case cur.QueensDied > prev.QueensDied:
-		return "THE QUEEN HAS DIED"
-	case cur.QueensMated > prev.QueensMated:
-		return "NEW QUEEN MATED"
-	case cur.QueensEmerged > prev.QueensEmerged:
-		return "VIRGIN QUEEN EMERGES"
-	case cur.EmergencyQueenCells > prev.EmergencyQueenCells:
-		return "EMERGENCY QUEEN CELLS"
-	case cur.SwarmPreparations > prev.SwarmPreparations:
-		return "QUEEN CELLS BUILT"
-	case cur.DroneLayingQueens > prev.DroneLayingQueens:
-		return "QUEEN NEVER MATED"
-	}
-	return ""
-}
-
-// timelapse: one frame per simulated day (at noon), with event banners.
+// timelapse: one frame per simulated day, at noon.
 func timelapse(name string, seed int64, days int) {
 	h := newHive(seed)
 	var frames []*image.RGBA
-	prev := h.Snapshot().Stats
-	banner, hold := "", 0
 	for d := 0; d < days; d++ {
 		for i := 0; i < simulation.DayTicks; i++ {
 			h.Update()
 			if i == simulation.DayTicks/2 {
-				break
+				frames = append(frames, frame(h))
 			}
 		}
-		cur := h.Snapshot().Stats
-		if e := events(prev, cur); e != "" {
-			banner, hold = e, 12
-		}
-		prev = cur
-		b := ""
-		if hold > 0 {
-			b = banner
-			hold--
-		}
-		frames = append(frames, frame(h, b, false))
-		for i := simulation.DayTicks/2 + 1; i < simulation.DayTicks; i++ {
-			h.Update()
-			if e := events(prev, h.Snapshot().Stats); e != "" && hold == 0 {
-				banner, hold = e, 12
-				prev = h.Snapshot().Stats
-			}
-		}
-		prev = h.Snapshot().Stats
 	}
 	save(name, frames, 8)
 }
 
 // realtime: every tick, as the panel shows it at 5 FPS.
-func realtime(name string, seed int64, startTick, ticks int, banner string) {
+func realtime(name string, seed int64, startTick, ticks int) {
 	h := newHive(seed)
 	for h.Tick < startTick {
 		h.Update()
@@ -273,7 +203,7 @@ func realtime(name string, seed int64, startTick, ticks int, banner string) {
 	var frames []*image.RGBA
 	for i := 0; i < ticks; i++ {
 		h.Update()
-		frames = append(frames, frame(h, banner, true))
+		frames = append(frames, frame(h))
 	}
 	save(name, frames, 20)
 }
@@ -296,7 +226,7 @@ func gallery(name string, seeds []int64, doy int) {
 		for int(h.DayOfYear()) != doy || h.TimeOfDay() < 0.5 {
 			h.Update()
 		}
-		f := frame(h, fmt.Sprintf("HIVE %d", seed), false)
+		f := frame(h)
 		ox, oy := (i%cols)*(outW+8), (i/cols)*(outH+8)
 		for y := 0; y < outH; y++ {
 			for x := 0; x < outW; x++ {
@@ -310,8 +240,80 @@ func gallery(name string, seeds []int64, doy int) {
 	fmt.Println(name)
 }
 
+// legend renders a colour key in the same LED style as the display.
+func legend(name string) {
+	type entry struct {
+		c     color.Color
+		label string
+	}
+	bee := func(r simulation.Role, t simulation.Task, load simulation.CellState) color.Color {
+		b := &simulation.Bee{Role: r, Task: t, Load: load}
+		return b.GetColor(0)
+	}
+	groups := []struct {
+		title   string
+		entries []entry
+	}{
+		{"BEES", []entry{
+			{bee(simulation.Queen, 0, 0), "QUEEN"},
+			{bee(simulation.Nurse, simulation.FeedQueen, 0), "NURSE FEEDING THE QUEEN"},
+			{bee(simulation.Nurse, 0, 0), "YOUNG BEE - CLEANER OR NURSE"},
+			{bee(simulation.Forager, 0, 0), "OLDER BEE - HOUSE BEE OR FORAGER"},
+			{bee(simulation.Forager, 0, simulation.Nectar), "CARRYING NECTAR"},
+			{bee(simulation.Forager, 0, simulation.Pollen), "CARRYING POLLEN"},
+			{color.RGBA{255, 255, 120, 255}, "FLASHING - WAGGLE DANCE"},
+			{bee(simulation.Drone, 0, 0), "DRONE - MALE BEE"},
+		}},
+		{"COMB", []entry{
+			{render.ColorEgg, "EGG"},
+			{render.ColorBrood, "LARVA - GROWS BRIGHTER"},
+			{render.ColorCapped, "CAPPED BROOD - PUPA"},
+			{render.ColorRoyal, "QUEEN CELL"},
+			{render.ColorNectar, "NECTAR - NOT YET HONEY"},
+			{render.ColorHoney, "HONEY"},
+			{render.ColorPollen, "POLLEN"},
+			{render.ColorComb, "EMPTY WAX COMB"},
+			{render.ColorExit, "ENTRANCE"},
+		}},
+	}
+	rowH, sw := 22, 14
+	rows := 0
+	for _, g := range groups {
+		rows += len(g.entries) + 2
+	}
+	img := image.NewRGBA(image.Rect(0, 0, 420, rows*rowH+8))
+	for i := 3; i < len(img.Pix); i += 4 {
+		img.Pix[i] = 255
+	}
+	y := 10
+	for _, g := range groups {
+		text(img, g.title, 12, y, 2, color.RGBA{255, 220, 60, 255})
+		y += rowH + 4
+		for _, e := range g.entries {
+			r, gg, b, _ := e.c.RGBA()
+			c := color.RGBA{uint8(r >> 8), uint8(gg >> 8), uint8(b >> 8), 255}
+			for dy := 0; dy < sw; dy++ {
+				for dx := 0; dx < sw; dx++ {
+					img.SetRGBA(14+dx, y-2+dy, c)
+				}
+			}
+			text(img, e.label, 40, y, 2, color.RGBA{200, 200, 200, 255})
+			y += rowH
+		}
+		y += rowH - 4
+	}
+	f, _ := os.Create(name)
+	png.Encode(f, img)
+	f.Close()
+	fmt.Println(name)
+}
+
 func main() {
 	out := os.Args[1]
+	if len(os.Args) > 2 && os.Args[2] == "legend" {
+		legend(out + "/colour-key.png")
+		return
+	}
 	if len(os.Args) > 2 && os.Args[2] == "gallery" {
 		gallery(out+"/gallery-july.png", []int64{1, 2, 3, 4, 5, 6, 7, 8}, 140)
 		gallery(out+"/gallery-january.png", []int64{1, 2, 3, 4, 5, 6, 7, 8}, 320)
@@ -325,9 +327,9 @@ func main() {
 		return
 	}
 	// Seconds-long, real speed clips (one frame per tick).
-	realtime(out+"/1-summer-morning-realtime.gif", 3, (95-simulation.StartDayOfYear)*day+day*38/100, 200, "")
+	realtime(out+"/1-summer-morning-realtime.gif", 3, (95-simulation.StartDayOfYear)*day+day*38/100, 200)
 	sw := findSwarmTick(3)
-	realtime(out+"/2-swarm-departing-realtime.gif", 3, sw-15, 220, "")
+	realtime(out+"/2-swarm-departing-realtime.gif", 3, sw-15, 220)
 	// Whole-year timelapses, one frame per day.
 	timelapse(out+"/3-seed3-year.gif", 3, 420)
 	timelapse(out+"/4-seed2-year.gif", 2, 548)

@@ -43,13 +43,22 @@ func checkInvariants(h *Hive) error {
 	}
 
 	var honey, nectar, pollen float64
-	brood, nectarCells, pollenCells, dirty := 0, 0, 0, 0
+	brood, nectarCells, pollenCells, dirty, built := 0, 0, 0, 0, 0
 	for y := range h.Grid {
 		for x := range h.Grid[y] {
 			c := &h.Grid[y][x]
 			i := h.idx(x, y)
 			if !h.inComb(x, y) && (c.State != Empty || c.Dirty) {
 				return fmt.Errorf("frame cell %d,%d in use", x, y)
+			}
+			if !c.Built && (c.State != Empty || c.Dirty) {
+				return fmt.Errorf("cell %d,%d used but no comb built", x, y)
+			}
+			if c.Built {
+				built++
+			}
+			if h.inComb(x, y) && !c.Built && (h.frontier.pos[i] >= 0) != h.touchesComb(x, y) {
+				return fmt.Errorf("frontier wrong at %d,%d", x, y)
 			}
 			if c.Amount < 0 || c.Amount > 1.0001 {
 				return fmt.Errorf("cell %d,%d amount %f", x, y, c.Amount)
@@ -82,6 +91,9 @@ func checkInvariants(h *Hive) error {
 				}
 			}
 		}
+	}
+	if built != h.combCells {
+		return fmt.Errorf("comb count %d vs %d", built, h.combCells)
 	}
 	if brood != len(h.brood) || nectarCells != len(h.nectarSet.items) ||
 		pollenCells != len(h.pollenSet.items) || dirty != len(h.dirtySet.items) {

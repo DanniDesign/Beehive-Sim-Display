@@ -8,6 +8,7 @@ import (
 	"image"
 	"image/color"
 	"image/gif"
+	"image/png"
 	"os"
 	"sort"
 	"strings"
@@ -87,6 +88,9 @@ func frame(h *simulation.Hive, banner string, clock bool) *image.RGBA {
 	small := image.NewRGBA(image.Rect(0, 0, W, H))
 	render.Draw(small, h)
 	big := image.NewRGBA(image.Rect(0, 0, outW, outH))
+	for i := 3; i < len(big.Pix); i += 4 {
+		big.Pix[i] = 255 // opaque black background between the LEDs
+	}
 	for y := 0; y < H; y++ {
 		for x := 0; x < W; x++ {
 			c := small.RGBAAt(x, y)
@@ -282,15 +286,50 @@ func findSwarmTick(seed int64) int {
 	return h.Tick
 }
 
+// gallery: many colonies side by side on the same date, to compare shapes.
+func gallery(name string, seeds []int64, doy int) {
+	cols := 2
+	rows := (len(seeds) + cols - 1) / cols
+	img := image.NewRGBA(image.Rect(0, 0, cols*(outW+8), rows*(outH+8)))
+	for i, seed := range seeds {
+		h := newHive(seed)
+		for int(h.DayOfYear()) != doy || h.TimeOfDay() < 0.5 {
+			h.Update()
+		}
+		f := frame(h, fmt.Sprintf("HIVE %d", seed), false)
+		ox, oy := (i%cols)*(outW+8), (i/cols)*(outH+8)
+		for y := 0; y < outH; y++ {
+			for x := 0; x < outW; x++ {
+				img.Set(ox+x, oy+y, f.At(x, y))
+			}
+		}
+	}
+	fh, _ := os.Create(name)
+	png.Encode(fh, img)
+	fh.Close()
+	fmt.Println(name)
+}
+
 func main() {
 	out := os.Args[1]
+	if len(os.Args) > 2 && os.Args[2] == "gallery" {
+		gallery(out+"/gallery-july.png", []int64{1, 2, 3, 4, 5, 6, 7, 8}, 140)
+		gallery(out+"/gallery-january.png", []int64{1, 2, 3, 4, 5, 6, 7, 8}, 320)
+		return
+	}
 	day := simulation.DayTicks
+	if len(os.Args) > 2 && os.Args[2] == "organic" {
+		timelapse(out+"/hive-4-year.gif", 4, 365)
+		timelapse(out+"/hive-5-year.gif", 5, 365)
+		timelapse(out+"/hive-7-year.gif", 7, 365)
+		return
+	}
 	// Seconds-long, real speed clips (one frame per tick).
 	realtime(out+"/1-summer-morning-realtime.gif", 3, (95-simulation.StartDayOfYear)*day+day*38/100, 200, "")
 	sw := findSwarmTick(3)
 	realtime(out+"/2-swarm-departing-realtime.gif", 3, sw-15, 220, "")
 	// Whole-year timelapses, one frame per day.
-	timelapse(out+"/3-seed3-year-swarms-and-survives.gif", 3, 420)
-	timelapse(out+"/4-seed2-starves-then-recolonised.gif", 2, 548)
-	timelapse(out+"/5-seed11-queen-lost-colony-dies.gif", 11, 548)
+	timelapse(out+"/3-seed3-year.gif", 3, 420)
+	timelapse(out+"/4-seed2-year.gif", 2, 548)
+	timelapse(out+"/5-seed11-year.gif", 11, 548)
 }

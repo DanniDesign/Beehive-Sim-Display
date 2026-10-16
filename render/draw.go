@@ -70,6 +70,9 @@ func cellColor(h *simulation.Hive, x, y int) color.RGBA {
 	if c.Dirty {
 		return ColorDirty
 	}
+	if c.Built {
+		return ColorComb
+	}
 	return ColorVoid
 }
 

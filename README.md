@@ -24,10 +24,19 @@ The model follows real *Apis mellifera* biology, scaled down to a 64x32 comb:
   more foragers. Nectar ripens and is capped as honey by house bees. All
   bees and larvae eat honey continuously; nurses eat pollen to make brood
   food. A colony that runs out starves.
-* **Comb layout** – pollen is packed around the brood, nectar just beyond it
-  and above, producing the classic honey arch. Bees eat from the inner edge
-  of the arch first. In winter the colony forms a tight cluster that slowly
-  creeps towards its honey.
+* **Comb building** – every hive is different. Comb hangs from the ceiling
+  in one to three irregular lobes, and house bees extend it (spending honey
+  on wax) when nectar is flowing and the colony is short of space. Brood and
+  stores can only go into built comb. Empty comb shows as faint brown; in a
+  dead hive wax moths slowly eat it away.
+* **Comb layout** – the entrance is on the bottom or low on a side wall. The
+  brood nest sits near it, pollen around the brood, and honey in irregular
+  patches beyond, mostly up and away from the entrance. Per-hive noise makes
+  the edges ragged, and the nest wanders with the brood. Bees eat from the
+  stores nearest the nest first. In winter the colony forms a tight cluster
+  that slowly creeps towards its honey.
+* **Receiver bees** – returning nectar foragers hand their load to house
+  bees waiting near the entrance, who carry it to the stores.
 * **Queen** – lays up to 16 eggs/day following the season, throttled by food
   stores and nurse availability, and is fed by a retinue of nurses (red).
 * **Drones** – reared April–August, make mating flights, and are thrown out
@@ -51,6 +60,7 @@ The model follows real *Apis mellifera* biology, scaled down to a 64x32 comb:
 | flashing yellow-white | waggle dance |
 | blue | drone |
 | off-white / green / brown | egg / larva (grows brighter) / capped brood |
+| faint brown | empty wax comb |
 | purple | queen cell |
 | pale gold / bright gold | nectar / capped honey |
 | orange-red | pollen |
@@ -70,6 +80,7 @@ go test ./simulation                      # invariants over many colonies, seaso
 go run ./cmd/montecarlo -runs 1000 -years 3   # Monte Carlo statistics
 go run ./cmd/montecarlo -trace -seed 7        # one colony, day by day
 go run -tags matrix ./gifgen out/          # render GIFs of the LED display (no screen needed)
+go run -tags matrix ./gifgen out/ gallery  # 8 hives side by side, July and January
 ```
 
 The simulation is deterministic for a given seed (`simulation.NewHiveWithSeed`),

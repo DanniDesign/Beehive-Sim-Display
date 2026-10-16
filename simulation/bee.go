@@ -34,6 +34,7 @@ const (
 	Deposit
 	Dance
 	LayEgg
+	BuildComb
 )
 
 // Trip is why a bee is heading out of the hive.
@@ -262,6 +263,8 @@ func (h *Hive) workerBehave(b *Bee) {
 		h.doGuard(b)
 	case Deposit:
 		h.doDeposit(b)
+	case BuildComb:
+		h.doBuild(b)
 	}
 }
 
@@ -280,6 +283,13 @@ func (h *Hive) decide(b *Bee) {
 	case HouseBee:
 		if x, y, ok := h.nearestIn(&h.nectarSet, b.X, b.Y, 25, h.nectarRipe); ok {
 			h.setTask(b, CapHoney, x, y)
+			return
+		}
+		if h.counts.Builders < 8 && h.needComb() && h.rng.Float64() < 0.3 {
+			cx, cy := h.nestCenter()
+			x, y := h.pickFrontier(cx, cy)
+			h.setTask(b, BuildComb, x, y)
+			h.counts.Builders++
 			return
 		}
 		h.tryClean(b, 12)
@@ -377,14 +387,8 @@ func (h *Hive) goExit(b *Bee) {
 		h.exit(b)
 		return
 	}
-	b.tx, b.ty, b.hasTarget = h.ExitX, h.height-2, true
+	b.tx, b.ty, b.hasTarget = h.inX, h.inY, true
 	h.step(b, 0.9)
-}
-
-// atEntrance reports whether a comb cell is close enough to the entrance
-// slot to fly out from (or land on).
-func (h *Hive) atEntrance(x, y int) bool {
-	return y >= h.height-3 && abs(x-h.ExitX) <= 2
 }
 
 func (h *Hive) exit(b *Bee) {
@@ -457,17 +461,51 @@ func (h *Hive) updateOutside(b *Bee) {
 	}
 	// Land on a free cell just inside the entrance.
 	for _, o := range h.radial[:15] {
-		x, y := h.ExitX+int(o.dx), h.height-2+int(o.dy)
+		x, y := h.inX+int(o.dx), h.inY+int(o.dy)
 		if h.inComb(x, y) && h.atEntrance(x, y) && h.occ[h.idx(x, y)] < 2 {
 			b.IsOutside = false
 			b.X, b.Y = x, y
 			h.occ[h.idx(x, y)]++
 			b.Task = Idle
 			b.hasTarget = false
+			if b.Load == Nectar {
+				h.handOff(b)
+			}
 			return
 		}
 	}
 	b.timer = 1 // entrance jammed, try again next tick
+}
+
+// handOff: a returning nectar forager passes her load mouth-to-mouth to a
+// receiver bee waiting near the entrance, who takes it to the stores, so
+// the forager can turn straight round (and perhaps dance first).
+func (h *Hive) handOff(b *Bee) {
+	for _, r := range h.bees {
+		if r.Role != HouseBee || r.IsOutside || r.dead || r.Task != Idle || r.Load != Empty || r.timer > 0 ||
+			chebyshev(r.X, r.Y, b.X, b.Y) > 4 {
+			continue
+		}
+		r.Load, r.loadAmt = b.Load, b.loadAmt
+		r.Task = Deposit
+		r.hasTarget = false
+		r.timer = 4
+		b.Load, b.loadAmt = Empty, 0
+		b.timer = 4
+		h.stats.NectarCollected += r.loadAmt
+		h.stats.Handoffs++
+		h.maybeDance(b)
+		return
+	}
+}
+
+// maybeDance: good forage is worth advertising with a waggle dance.
+func (h *Hive) maybeDance(b *Bee) {
+	f := h.ForageAvailability()
+	if f > 0.5 && h.CanFly() && h.rng.Float64() < 0.3*f {
+		b.Task = Dance
+		b.timer += 15 + h.rng.Intn(15)
+	}
 }
 
 func (h *Hive) doClean(b *Bee) {
@@ -480,6 +518,23 @@ func (h *Hive) doClean(b *Bee) {
 		h.setDirty(b.tx, b.ty, false)
 		b.timer = 5
 		b.Task = Idle
+	}
+}
+
+// doBuild: wax glands turn honey into new cells at the edge of the comb.
+func (h *Hive) doBuild(b *Bee) {
+	if h.Grid[b.ty][b.tx].Built {
+		b.Task = Idle
+		b.hasTarget = false
+		return
+	}
+	if h.arrived(b, 0.8) {
+		h.buildCell(b.tx, b.ty)
+		h.demand += 0.05
+		h.stats.CombBuilt++
+		b.timer = 20
+		b.Task = Idle
+		b.hasTarget = false
 	}
 }
 
@@ -554,8 +609,8 @@ func (h *Hive) doCapHoney(b *Bee) {
 
 func (h *Hive) doGuard(b *Bee) {
 	if !b.hasTarget {
-		b.tx = clamp(h.ExitX+h.rng.Intn(5)-2, 1, h.width-2)
-		b.ty = h.height - 2 - h.rng.Intn(2)
+		b.tx = clamp(h.inX+h.rng.Intn(5)-2+h.inNX, 1, h.width-2)
+		b.ty = clamp(h.inY+h.rng.Intn(5)-2+h.inNY, 1, h.height-2)
 		b.hasTarget = true
 	}
 	if chebyshev(b.X, b.Y, b.tx, b.ty) > 0 {
@@ -583,7 +638,9 @@ func (h *Hive) doDeposit(b *Bee) {
 	}
 	if h.arrived(b, 0.85) {
 		h.deposit(b.tx, b.ty, b.Load, b.loadAmt)
-		if b.Load == Nectar {
+		if b.Role != Forager {
+			// a receiver bee storing a forager's load (already counted)
+		} else if b.Load == Nectar {
 			h.stats.NectarCollected += b.loadAmt
 		} else {
 			h.stats.PollenCollected += b.loadAmt
@@ -591,11 +648,8 @@ func (h *Hive) doDeposit(b *Bee) {
 		b.Load, b.loadAmt = Empty, 0
 		b.hasTarget = false
 		b.Task = Idle
-		// Good forage is worth advertising: a waggle dance on the comb.
-		f := h.ForageAvailability()
-		if f > 0.5 && h.CanFly() && h.rng.Float64() < 0.3*f {
-			b.Task = Dance
-			b.timer = 15 + h.rng.Intn(15)
+		if b.Role == Forager {
+			h.maybeDance(b)
 		}
 	}
 }
@@ -646,7 +700,7 @@ func (h *Hive) queenBehave(b *Bee) {
 	// Lay in a clean cell right next to her if it is part of the nest...
 	for _, o := range h.radial[1:9] {
 		x, y := b.X+int(o.dx), b.Y+int(o.dy)
-		if h.inComb(x, y) && h.Grid[y][x].Usable() && h.distToNest(x, y) <= h.nestR+2 {
+		if h.inComb(x, y) && h.Grid[y][x].Usable() && h.distToNest(x, y) <= h.nestR+1.5 {
 			h.queenLays(b, x, y, kind)
 			return
 		}
@@ -654,7 +708,12 @@ func (h *Hive) queenBehave(b *Bee) {
 	// ...otherwise walk to the free cell closest to the nest centre.
 	if b.Task != LayEgg || !h.Grid[b.ty][b.tx].Usable() {
 		cx, cy := h.nestCenter()
-		x, y, ok := h.nearest(cx, cy, h.radial, 1e9, func(_, _ int, c *Cell) bool { return c.Usable() })
+		x, y, ok := h.nearestPick(cx, cy, h.radial, 4, func(x, y int, c *Cell) bool {
+			return c.Usable() && h.distToNest(x, y) <= h.nestR+4
+		})
+		if !ok {
+			x, y, ok = h.nearest(cx, cy, h.radial, 1e9, func(_, _ int, c *Cell) bool { return c.Usable() })
+		}
 		if !ok {
 			b.layBudget = 0 // comb is full
 			return
@@ -732,12 +791,18 @@ func (h *Hive) loiter(b *Bee) {
 	case h.Cold():
 		r = h.clusterRadius()
 		move = 0.08
+	case b.Role == HouseBee && h.rng.Float64() < 0.4:
+		// receivers wait for incoming foragers near the entrance
+		cx += (float64(h.inX) - cx) * 0.75
+		cy += (float64(h.inY) - cy) * 0.75
+		r = 4
 	case b.Role == HouseBee:
-		cy -= h.nestR * 0.8
+		cx += h.honeyDX * h.nestR * 0.8 / 0.6
+		cy += h.honeyDY * h.nestR * 0.8
 		r = h.nestR + 3
 	case b.Role == Forager:
-		cx += (float64(h.ExitX) - cx) * 0.5
-		cy += (float64(h.height-2) - cy) * 0.5
+		cx += (float64(h.inX) - cx) * 0.5
+		cy += (float64(h.inY) - cy) * 0.5
 		r = math.Max(5, h.nestR)
 	case b.Role == Drone:
 		r = h.nestR + 4

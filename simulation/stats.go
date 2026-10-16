@@ -12,6 +12,7 @@ type Counts struct {
 	Guards     int
 	Foragers   int
 	Attendants int // nurses currently feeding the queen
+	Builders   int // house bees building comb
 	Eggs       int
 	Larvae     int // open worker/drone brood
 	Pupae      int // capped brood
@@ -34,6 +35,7 @@ type Counters struct {
 	SwarmPreparations, Swarms, EmergencyQueenCells, Supersedures int
 	QueensMated, QueensLostMating, QueensDied, DroneLayingQueens int
 	LayingWorkerDays, StarvationEpisodes                         int
+	CombBuilt, Handoffs                                          int
 
 	Collapses, CollapseStarved, CollapseQueenless, CollapseDwindled int
 	Recolonizations                                                 int
@@ -72,6 +74,8 @@ func (h *Hive) census() Counts {
 		c.Workers++
 		if b.Task == FeedQueen {
 			c.Attendants++
+		} else if b.Task == BuildComb {
+			c.Builders++
 		}
 	}
 	for _, ci := range h.brood {
@@ -118,6 +122,7 @@ type Snapshot struct {
 	Stats       Counters
 	HoneyCells  int
 	PollenCells int
+	CombCells   int
 	DirtyCells  int
 	// Mean row of brood/honey cells: honey should sit above the brood.
 	BroodMeanY, HoneyMeanY float64
@@ -166,6 +171,7 @@ func (h *Hive) Snapshot() Snapshot {
 		}
 	}
 	s.HoneyCells = hn
+	s.CombCells = h.combCells
 	if bn > 0 {
 		s.BroodMeanY = by / float64(bn)
 	}

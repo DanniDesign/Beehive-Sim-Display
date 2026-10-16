@@ -10,7 +10,7 @@ import (
 
 type Hive struct {
 	Name         string
-	ExitX, ExitY int // entrance, on the bottom edge of the frame
+	ExitX, ExitY int // entrance, on the bottom or a side of the frame
 	Grid         [][]Cell
 	Tick         int
 	Age          int
@@ -33,7 +33,14 @@ type Hive struct {
 
 	nestX, nestY float64 // brood nest / winter cluster centre
 	homeX, homeY float64
-	nestR        float64 // current brood nest radius (combDist units)
+
+	inX, inY, inNX, inNY int     // comb cell just inside the entrance, and the inward direction
+	honeyDX, honeyDY     float64 // direction (from the nest) in which honey is stored
+	noise, storeNoise    []float32
+	frontier             cellSet // unbuilt cells at the edge of the comb
+	combCells            int
+	freeNearNest         int
+	nestR                float64 // current brood nest radius (combDist units)
 
 	nectarSet, pollenSet, dirtySet cellSet
 
@@ -92,15 +99,14 @@ func NewHiveWithSeed(seed int64, beeAmount, width, height int, p Params) *Hive {
 	h.pollenSet = newCellSet(width * height)
 	h.dirtySet = newCellSet(width * height)
 	h.radial = buildOffsets(width, height, combDist)
+	h.frontier = newCellSet(width * height)
+	h.buildNoise()
+	h.setupEntrance()
 	h.honeyOffs = buildOffsets(width, height, func(dx, dy float64) float64 {
-		return combDist(dx, dy) + 0.45*dy
+		return combDist(dx, dy) - 0.45*(dx*0.6*h.honeyDX+dy*h.honeyDY)
 	})
-
-	h.homeX = float64(width/2 + rng.Intn(13) - 6)
-	h.homeY = float64(height/2 + 1)
-	h.nestX, h.nestY = h.homeX, h.homeY
-	h.ExitX = clamp(int(h.homeX)+rng.Intn(21)-10, 3, width-4)
-	h.ExitY = height - 1
+	h.growInitialComb(380 + rng.Intn(520))
+	h.placeHome()
 	h.rollWeather()
 	h.updateEnv()
 
@@ -131,7 +137,7 @@ func (h *Hive) seedColony(workers int) {
 	}
 	cx, cy := h.nestCenter()
 	for i := 0; i < workers/4; i++ {
-		x, y, ok := h.nearest(cx, cy, h.radial, 40, func(_, _ int, c *Cell) bool { return c.Usable() })
+		x, y, ok := h.nearestPick(cx, cy, h.radial, 4, func(_, _ int, c *Cell) bool { return c.Usable() })
 		if !ok {
 			break
 		}
@@ -220,6 +226,7 @@ func (h *Hive) daily() {
 
 	h.updateNestRadius(float64(c.Eggs + c.Larvae + c.Pupae))
 	h.moveNest()
+	h.countFreeNearNest()
 
 	// Behavioural development speeds up when foragers are scarce and
 	// slows down when there are plenty (or in winter): the colony's
@@ -282,8 +289,20 @@ func (h *Hive) moveNest() {
 		}
 		return
 	}
-	h.nestX += clampF(h.homeX-h.nestX, -0.25, 0.25)
-	h.nestY += clampF(h.homeY-h.nestY, -0.25, 0.25)
+	// The nest wanders with the brood (the queen lays where there is
+	// room), with a gentle pull back towards the warm core near the entrance.
+	if len(h.brood) > 20 {
+		var sx, sy float64
+		for _, ci := range h.brood {
+			sx += float64(int(ci) % h.width)
+			sy += float64(int(ci) / h.width)
+		}
+		n := float64(len(h.brood))
+		h.nestX += clampF(sx/n-h.nestX, -0.6, 0.6) * 0.3
+		h.nestY += clampF(sy/n-h.nestY, -0.6, 0.6) * 0.3
+	}
+	h.nestX += clampF(h.homeX-h.nestX, -0.3, 0.3)
+	h.nestY += clampF(h.homeY-h.nestY, -0.3, 0.3)
 }
 
 func (h *Hive) clusterRadius() float64 {
@@ -471,7 +490,8 @@ func (h *Hive) maybeStartSwarming() {
 		return
 	}
 	// Queen cups hang from the lower edge of the brood nest.
-	ex, ey := cx, clamp(int(h.nestY+h.nestR), 1, h.height-2)
+	ex := clamp(int(h.nestX-h.honeyDX*h.nestR/0.6), 1, h.width-2)
+	ey := clamp(int(h.nestY-h.honeyDY*h.nestR), 1, h.height-2)
 	built := 0
 	for built < 3 {
 		x, y, ok := h.nearest(ex, ey, h.radial, 12, func(_, _ int, c *Cell) bool { return c.Usable() })
@@ -625,6 +645,10 @@ func (h *Hive) robDeadHive() {
 			if c.Dirty && h.rng.Float64() < 0.1 {
 				h.setDirty(x, y, false)
 			}
+			// Wax moth larvae chew through unguarded comb, edges first.
+			if c.Built && c.State == Empty && h.builtNeighbours(x, y) < 8 && h.rng.Float64() < 0.03 {
+				h.unbuildCell(x, y)
+			}
 		}
 	}
 }
@@ -635,7 +659,7 @@ func (h *Hive) wildSwarmArrives() {
 	h.dead = false
 	h.starving = -1
 	h.queenlessFrom = -1
-	h.nestX, h.nestY = h.homeX, h.homeY
+	h.placeHome()
 	h.stats.Recolonizations++
 	h.Name = h.faker.Bird()
 
@@ -666,7 +690,7 @@ func (h *Hive) findStoreCell(s CellState) (int, int, bool) {
 		minD = h.nestR + 2.5
 		offs = h.honeyOffs
 	}
-	return h.nearest(cx, cy, offs, 1e9, func(x, y int, c *Cell) bool {
+	return h.pickStoreCell(cx, cy, offs, func(x, y int, c *Cell) bool {
 		if h.distToNest(x, y) < minD {
 			return false
 		}

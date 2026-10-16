@@ -29,6 +29,7 @@ const (
 type Cell struct {
 	State  CellState
 	Kind   BroodKind
+	Built  bool    // wax comb exists here (bees build it over time)
 	Dirty  bool    // used cell that has to be cleaned before reuse
 	Amount float32 // food in the cell (nectar/honey/pollen), 0..1
 	since  int32   // tick the cell entered its current state
@@ -42,7 +43,7 @@ func (c *Cell) IsBrood() bool { return c.State == Egg || c.State == Larva || c.S
 func (c *Cell) IsFood() bool { return c.State == Honey || c.State == Nectar }
 
 // Usable reports whether the cell is clean and empty.
-func (c *Cell) Usable() bool { return c.State == Empty && !c.Dirty }
+func (c *Cell) Usable() bool { return c.Built && c.State == Empty && !c.Dirty }
 
 // BroodProgress returns 0..1 for how far a brood cell is through its
 // current stage (used by the renderer).
@@ -208,7 +209,7 @@ func (h *Hive) layEgg(x, y int, kind BroodKind) {
 func (h *Hive) deposit(x, y int, s CellState, amount float64) float64 {
 	c := &h.Grid[y][x]
 	if c.State == Empty {
-		if c.Dirty {
+		if c.Dirty || !c.Built {
 			return 0
 		}
 		h.setState(x, y, s)
@@ -288,7 +289,8 @@ func (h *Hive) nestCenter() (int, int) {
 	return int(math.Round(h.nestX)), int(math.Round(h.nestY))
 }
 
-// distToNest is the elliptical distance of a cell from the brood nest centre.
+// distToNest is the elliptical distance of a cell from the brood nest
+// centre, warped by the hive's noise field so the nest has ragged edges.
 func (h *Hive) distToNest(x, y int) float64 {
-	return combDist(float64(x)-h.nestX, float64(y)-h.nestY)
+	return combDist(float64(x)-h.nestX, float64(y)-h.nestY) + 2.4*h.noiseAt(x, y)
 }

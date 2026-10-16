@@ -13,5 +13,6 @@ var (
 	ColorBrood  = color.RGBA{0, 255, 128, 255} // Bright Neon Spring Green (open brood / larvae)
 	ColorCapped = color.RGBA{110, 45, 0, 255}  // Brown wax cappings over pupae
 	ColorRoyal  = color.RGBA{150, 0, 120, 255} // Queen cell
-	ColorDirty  = color.RGBA{10, 5, 0, 255}    // Used cell waiting to be cleaned
+	ColorComb   = color.RGBA{24, 15, 2, 255}   // Empty wax comb (faint, shows the comb's shape)
+	ColorDirty  = color.RGBA{38, 20, 2, 255}   // Used cell waiting to be cleaned
 )

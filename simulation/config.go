@@ -85,7 +85,7 @@ func DefaultParams() Params {
 		HouseAgeDays:     12,
 		ForagerAgeDays:   20,
 
-		NectarLoad:         0.18,
+		NectarLoad:         0.195,
 		PollenLoad:         0.12,
 		PollenPerRefill:    0.03,
 		FeedsPerRefill:     4,
